@@ -1,0 +1,484 @@
+# PayloadStash – README & YAML Spec
+
+YAML‑driven HTTP fetch‑and‑stash for Python. Define your run once, execute a sequence of REST calls, and write every 
+response to a clean, predictable folder structure—**with defaults, forced fields, anchors/aliases, concurrency, 
+resilient error handling, and run‑level reporting**.
+
+## Concept
+
+**PayloadStash** reads a YAML config, resolves YAML anchors, merges **Defaults** and **Forced** values into each 
+request, and executes requests **sequentially** or **concurrently** according to your **Sequences**. Responses are 
+saved to disk with file extensions based on **Content‑Type**.
+
+* **Defaults** – Used **only if** a request does not provide that section.
+* **Forced** – Injected into **every** request; **overrides** request and defaults when keys collide.
+* **Resolved copy** – After anchor resolution & merges, the effective config is written to `*-resolved.yml` next to 
+  the output.
+* **Failure handling** – A failing request **does not stop the stash run**. Its HTTP status and timing are recorded,
+  output is written (error body if available), and subsequent requests continue.
+
+---
+
+## Quick Start
+
+```bash
+# 1) Install (example)
+pip install .
+
+# 2) Run a config
+payloadstash run path/to/config.yml --out ./out
+
+# 3) Validate only (no requests)
+payloadstash validate path/to/config.yml
+
+# 4) Emit the fully-resolved config (after anchors & merges)
+payloadstash resolve path/to/config.yml --out ./out
+```
+
+---
+
+## Directory Layout
+
+PayloadStash writes responses to a deterministic path with a **timestamped run folder**:
+
+```
+<out>/
+  <StashConfig.Name>/
+    <RunTimestamp>/
+      <Sequence.Name>/
+        <RequestKey>.<ext>
+      <original-config>-results.csv
+      <original-config>-resolved.yml
+```
+
+**Example**
+
+```
+out/
+  PXXX-Tester-01/
+    2025-09-17T15-42-10Z/
+      GetGeneralData/
+        GetConfig.json
+        GetCatalog.json
+      GetPlayer01/
+        GetState.json
+        GrantItem.json
+      PXXX-Tester-01-results.csv
+      PXXX-Tester-01-resolved.yml
+```
+
+---
+
+## Configuration Overview
+
+A PayloadStash YAML contains two major areas:
+
+1. **Header Groups (Anchors / Aliases)** – optional convenience blocks for DRY configs.
+2. **StashConfig** – the actual run definition: name, defaults, forced values, and sequences.
+
+```yml
+###########################################################
+# Header Groups (Anchors / Aliases)
+###########################################################
+
+common_headers: &common_headers
+  Content-Type: application/json
+  Accept: application/json
+
+common_headers_players: &common_headers_players
+  X-App-Client: PayloadStash/1.0
+  X-Player-API: v2
+
+###########################################################
+# Stash Configuration
+###########################################################
+
+StashConfig:
+  Name: PXXX-Tester-01
+
+  #########################################################
+  # Defaults
+  #########################################################
+  Defaults:
+    URLRoot: https://somehost.com/api/v1
+    Headers: *common_headers
+
+  #########################################################
+  # Forced Values
+  #########################################################
+  Forced:
+    Headers: {}
+    Body:
+      someprop: abc
+      anotherprop: your value here
+    Query: {}
+
+  #########################################################
+  # Sequences
+  #########################################################
+  Sequences:
+    - Name: GetGeneralData
+      Type: Concurrent
+      ConcurrencyLimit: 4
+      Requests:
+        - GetConfig:
+            Method: POST
+            URLPath: /getGameConfig
+            Headers:
+              <<: *common_headers
+              X-Request-Scope: config
+
+        - GetCatalog:
+            Method: POST
+            URLPath: /getGameConfig
+            Headers:
+              <<: *common_headers
+              X-Request-Scope: catalog
+
+    - Name: GetPlayer01
+      Type: Sequential
+      Requests:
+        - GetState:
+            Method: POST
+            URLPath: /getState
+            Headers:
+              <<: [*common_headers, *common_headers_players]
+              X-Request-Scope: state
+
+        - GrantItem:
+            Method: POST
+            URLPath: /grantItem
+            Headers:
+              <<: [*common_headers, *common_headers_players]
+              X-Request-Scope: grant
+```
+
+---
+
+## Full YAML Schema (informal)
+
+```yml
+# 0) Optional header groups for anchors/aliases
+<alias_name>: &<alias_name>
+  <HeaderKey>: <string>
+  ...repeat as needed...
+
+StashConfig:
+  Name: <string>
+
+  Defaults?:
+    URLRoot?: <string>
+    Headers?: { <k>: <v>, ... }
+    Body?:    { <k>: <v>, ... }
+    Query?:   { <k>: <v>, ... }
+
+  Forced?:
+    Headers?: { <k>: <v>, ... }
+    Body?:    { <k>: <v>, ... }
+    Query?:   { <k>: <v>, ... }
+    
+  # Optional global retry policy (applies when a request omits Retry)
+  Retry?:
+    Attempts: <int>                 # total tries including the first (e.g., 3)
+    BackoffStrategy: <fixed|exponential>
+    BackoffSeconds: <number>        # base delay (e.g., 0.5)
+    Multiplier?: <number>           # exponential growth factor (e.g., 2.0)
+    MaxBackoffSeconds?: <number>    # cap per-try backoff
+    MaxElapsedSeconds?: <number>    # overall cap across all retries (optional)
+    Jitter?: <bool>                 # true = add full jitter (random 0..backoff), false = no jitter
+    RetryOnStatus?: [<int>, ...]    # HTTP codes to retry (e.g., [429, 500, 502, 503, 504])
+    RetryOnNetworkErrors?: <bool>   # retry on DNS/connect/reset/timeouts (default: true)
+    RetryOnTimeouts?: <bool>        # retry when client timeout occurs (default: true)
+
+  Sequences:
+    - Name: <string>
+      Type: <Sequential|Concurrent>
+      ConcurrencyLimit?: <int>
+      Requests:
+        - <RequestKey>:
+            Method: <GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS>
+            URLPath: <string>
+            Headers?: { <k>: <v>, ... }
+            Body?:    { <k>: <v>, ... }
+            Query?:   { <k>: <v>, ... }
+            TimeoutSeconds?: <int>
+            # Optional per-request retry policy (overrides Defaults.Retry if present)
+            Retry?:
+              Attempts: <int>
+              BackoffStrategy: <fixed|exponential>
+              BackoffSeconds: <number>
+              Multiplier?: <number>
+              MaxBackoffSeconds?: <number>
+              MaxElapsedSeconds?: <number>
+              Jitter?: <none|full|equal>
+              RetryOnStatus?: [<int>, ...]
+              RetryOnNetworkErrors?: <bool>
+              RetryOnTimeouts?: <bool>
+```
+
+---
+
+## Merge & Precedence Rules
+
+PayloadStash computes each request’s **effective** sections in this order:
+
+1. Start with empty `{Headers, Body, Query}`.
+2. If the request defines a section, copy it in.
+3. If the request omits a section, copy from **Defaults**.
+4. **Forced** is merged last and overrides.
+5. `URLRoot` comes from request (if supported) or Defaults.
+
+Example: If `Defaults.Body.team = "blue"`, `Request.Body.team` omitted, and `Forced.Body.team = "green"`, 
+then `team == "green"`.
+
+---
+
+## Anchors, Aliases & Header Merging
+
+YAML anchors are resolved before merging Defaults/Forced.
+
+```yml
+common_headers: &common_headers
+  Content-Type: application/json
+  Accept: application/json
+
+player_headers: &player_headers
+  X-App-Client: PayloadStash/1.0
+  X-Player-API: v2
+
+Headers:
+  <<: [*common_headers, *player_headers]
+  X-Request-Scope: state
+```
+
+If the same key appears in multiple merged maps, the last one wins. After anchor resolution, PayloadStash writes 
+`*-resolved.yml` so you can audit.
+
+---
+
+## Sequences & Concurrency
+
+* `Sequences` are executed **in the order listed**.
+* Each sequence has a `Type`:
+
+    * **Sequential**: requests execute one-at-a-time.
+    * **Concurrent**: requests execute in parallel (async/await). `ConcurrencyLimit` caps fan-out.
+* A failed request does not stop the run. Its response, HTTP status, and timing are written; execution continues.
+
+---
+
+## Retry Explained
+
+The `Retry` block defines how PayloadStash retries failed HTTP requests.
+
+### Location
+
+* Can be defined under `Defaults` to apply globally.
+* Can be overridden or disabled (`Retry: null`) at the per-request level.
+
+### Fields
+
+* **Attempts** – total tries including the first.
+  `Attempts: 3` = first try + up to 2 retries.
+* **BackoffStrategy** – either `fixed` or `exponential`.
+    * `fixed`: each retry waits the same `BackoffSeconds`.
+    * `exponential`: waits grow by a `Multiplier` each retry (e.g., 0.5s, 1s, 2s, 4s…).
+* **BackoffSeconds** – base wait time before applying strategy.
+* **Multiplier** – growth factor for exponential backoff.
+* **MaxBackoffSeconds** – maximum wait allowed for a single retry.
+* **MaxElapsedSeconds** – maximum total time spent across all retries.
+* **Jitter** – `true` adds **full jitter** (random delay between 0 and backoff). `false` means no jitter.
+* **RetryOnStatus** – list of HTTP status codes to retry (e.g., 429, 500, 502, 503, 504).
+* **RetryOnNetworkErrors** – retry on DNS/connect/reset errors (default: true).
+* **RetryOnTimeouts** – retry when client timeout occurs (default: true).
+
+### Disabling Retry
+
+* **Globally**: set `Defaults.Retry: null` or omit it entirely.
+* **Per request**: set `Retry: null` under that request.
+
+### Example
+
+```yml
+Defaults:
+  Retry:
+    Attempts: 4
+    BackoffStrategy: exponential
+    BackoffSeconds: 0.5
+    Multiplier: 2.0
+    MaxBackoffSeconds: 10
+    Jitter: true
+    RetryOnStatus: [429, 500, 502, 503, 504]
+
+Sequences:
+  - Name: ExampleSeq
+    Type: Sequential
+    Requests:
+      - GetState:
+          Method: GET
+          URLPath: /state
+          Retry: null   # disable retry here
+      - GetConfig:
+          Method: GET
+          URLPath: /config
+          # inherits Defaults.Retry with jitter enabled
+```
+
+---
+
+## Output Files & Extensions
+
+Each request writes one file named after the **RequestKey** with an extension derived from the **Content‑Type** of the 
+response.
+
+| Content-Type                | Extension |
+| --------------------------- | --------- |
+| application/json            | .json     |
+| text/plain                  | .txt      |
+| text/csv                    | .csv      |
+| application/xml or text/xml | .xml      |
+| application/pdf             | .pdf      |
+| image/\*                    | .png/.jpg |
+| unknown/missing             | .txt      |
+
+**Path construction**
+
+```
+<out>/<StashConfig.Name>/<RunTimestamp>/<Sequence.Name>/<RequestKey>.<ext>
+```
+
+---
+
+## Run Results CSV
+
+Each run produces a `<original-config>-results.csv` file in the run’s timestamped directory. This file logs metadata 
+for every request executed.
+
+**File path:**
+
+```
+<out>/<StashConfig.Name>/<RunTimestamp>/<original-config>-results.csv
+```
+
+**Columns:**
+
+* `sequence` – the sequence name.
+* `request` – the request key.
+* `timestamp` – UTC timestamp when executed.
+* `status` – HTTP status code (or -1 if none).
+* `duration_ms` – request time in ms.
+
+**Example:**
+
+```csv
+sequence,request,timestamp,status,duration_ms
+GetGeneralData,GetConfig,2025-09-17T15:42:11Z,200,123
+GetGeneralData,GetCatalog,2025-09-17T15:42:11Z,500,87
+GetPlayer01,GetState,2025-09-17T15:42:12Z,200,212
+GetPlayer01,GrantItem,2025-09-17T15:42:13Z,200,145
+```
+
+---
+
+## CLI Usage
+
+```bash
+payloadstash run CONFIG.yml --out ./out [--max-workers 16]
+
+payloadstash validate CONFIG.yml
+
+payloadstash resolve CONFIG.yml --out ./out
+```
+
+Exit codes:
+
+* 0 = run success, no validation errors and all requests were http 200s.
+* 1 = run success, but at least one http request was other than http 200s.
+* 9 = run not successful due to a validation error, or output write error. Output might be partial.
+
+> **Note:** Individual request errors will not cause a premature exit.
+
+---
+
+## Validation Rules
+
+* `StashConfig.Name` required.
+* At least one sequence.
+* Each sequence must have Name, Type, and at least one Request.
+* Each request must have one key, Method, and URLPath.
+* Headers, Body, Query must be maps.
+* ConcurrencyLimit is only allowed for Type=Concurrent and must be >0 if present.
+
+---
+
+## Examples
+
+### Minimal
+
+```yml
+StashConfig:
+  Name: MiniRun
+  Sequences:
+    - Name: OnlySeq
+      Type: Sequential
+      Requests:
+        - Ping:
+            Method: GET
+            URLPath: /health
+```
+
+### With Defaults & Forced
+
+```yml
+common: &common
+  Accept: application/json
+
+StashConfig:
+  Name: WithDefaultsForced
+  Defaults:
+    URLRoot: https://api.example.com/v1
+    Headers:
+      <<: *common
+      User-Agent: PayloadStash/1.0
+  Forced:
+    Headers:
+      X-Env: prod
+    Query:
+      lang: en-US
+  Sequences:
+    - Name: SeqA
+      Type: Concurrent
+      ConcurrencyLimit: 3
+      Requests:
+        - A:
+            Method: GET
+            URLPath: /a
+        - B:
+            Method: GET
+            URLPath: /b
+            Headers:
+              Authorization: Bearer TOKEN
+```
+
+---
+
+## Implementation Notes
+
+* Async runtime: asyncio with httpx/aiohttp.
+* Anchor resolution: resolve << merges, write \*-resolved.yml inside timestamp folder.
+* URL concat: `URLRoot.rstrip('/') + '/' + URLPath.lstrip('/')`.
+* Error handling: record status/body; do not abort run; log in <original-config>-results.csv.
+* Case handling: headers case-insensitive.
+* Timing: capture duration\_ms and timestamp per request.
+* Extensibility: TimeoutSeconds and Retry possible.
+
+---
+
+### FAQ
+
+* Failed requests are recorded, not fatal.
+* Resolved config written inside timestamped folder.
+
+---
+
+Happy stashing!!️

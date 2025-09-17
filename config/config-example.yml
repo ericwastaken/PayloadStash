@@ -1,0 +1,43 @@
+common_headers: &common_headers
+  Content-Type: application/json
+  Accept: application/json
+
+common_body: &common_body
+  someProperty: someValue
+
+StashConfig:
+  Name: Example
+
+  Defaults:
+    Headers:
+      <<: *common_headers
+      Authorization: Bearer ABC123
+
+    Retry:
+      Attempts: 4
+      BackoffStrategy: exponential
+      BackoffSeconds: 0.5
+      Multiplier: 2.0
+      MaxBackoffSeconds: 10
+      Jitter: true
+      RetryOnStatus: [429, 500, 502, 503, 504]
+
+  Forced:
+    Headers:
+      Authorization: Bearer DEF456
+    Body:
+      <<: *common_body
+
+  Sequences:
+    - Name: ExampleSeq
+      Type: Sequential
+      Requests:
+        - GetState:
+            Method: GET
+            URLPath: /state
+            Body:
+              someOther: value2
+            Retry: Null
+        - GetConfig:
+            Method: GET
+            URLPath: /config
