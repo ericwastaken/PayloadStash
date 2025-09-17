@@ -22,7 +22,7 @@ saved to disk with file extensions based on **Content‑Type**.
 ## Quick Start
 
 ```bash
-# 1) Install (example)
+# 1) Install (example) - note see DEVELOPER INSTALL below for dev setup!
 pip install .
 
 # 2) Run a config
@@ -478,6 +478,16 @@ StashConfig:
 
 * Failed requests are recorded, not fatal.
 * Resolved config written inside timestamped folder.
+
+---
+
+## Developer Install
+
+- Do once per environment: `python -m pip install -e .`
+- Reinstall only when:
+    - dependencies change, or
+    - entry point names change.
+- Otherwise, edit code and rerun the CLI `payloadstash`, no reinstall needed.
 
 ---
 

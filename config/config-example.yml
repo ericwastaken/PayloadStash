@@ -1,43 +1,51 @@
+# Define reusable common headers for HTTP requests
 common_headers: &common_headers
   Content-Type: application/json
   Accept: application/json
 
+# Define reusable common body parameters
 common_body: &common_body
   someProperty: someValue
 
 StashConfig:
+  # Unique name to identify this configuration
   Name: Example
 
+  # Default settings applied to all requests unless overridden
   Defaults:
+    # Default headers including common headers
     Headers:
       <<: *common_headers
       Authorization: Bearer ABC123
 
+    # Retry configuration for failed requests
     Retry:
-      Attempts: 4
-      BackoffStrategy: exponential
-      BackoffSeconds: 0.5
-      Multiplier: 2.0
-      MaxBackoffSeconds: 10
-      Jitter: true
-      RetryOnStatus: [429, 500, 502, 503, 504]
+      Attempts: 4                    # Number of retry attempts
+      BackoffStrategy: exponential   # Exponential backoff between retries
+      BackoffSeconds: 0.5           # Initial backoff duration
+      Multiplier: 2.0               # Multiplier for exponential backoff
+      MaxBackoffSeconds: 10         # Maximum backoff duration
+      Jitter: true                  # Add randomness to backoff time
+      RetryOnStatus: [ 429, 500, 502, 503, 504 ]  # HTTP status codes to retry on
 
+  # Forced settings that override request-specific settings
   Forced:
     Headers:
       Authorization: Bearer DEF456
     Body:
       <<: *common_body
 
+  # Define sequences of API requests
   Sequences:
-    - Name: ExampleSeq
-      Type: Sequential
+    - Name: ExampleSeq             # Name of the sequence
+      Type: Sequential             # Requests run in sequence
       Requests:
-        - GetState:
-            Method: GET
-            URLPath: /state
-            Body:
+        - GetState: # First request
+            Method: GET            # HTTP method
+            URLPath: /state        # API endpoint path
+            Body: # Request body
               someOther: value2
-            Retry: Null
-        - GetConfig:
+            Retry: Null           # Disable retry for this request
+        - GetConfig: # Second request
             Method: GET
             URLPath: /config
