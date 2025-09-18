@@ -275,15 +275,18 @@ def run(config: Path, out_dir: Path, max_workers: int | None, dry_run: bool, yes
                             log_yaml(log_path, "    Resolved Retry:", effective_retry, indent=6)
                         # Make HTTP request with timeout, catch failure
                         try:
-                            status, resp_headers, resp_text, attempts_made = rm.request(
+                            status, resp_headers, resp_text, attempts_made, req_log = rm.request(
                                 method=method,
                                 url=full_url,
                                 headers=headers_out,
                                 body=data_bytes,
                                 timeout_s=timeout_s,
                                 retry_cfg=effective_retry,
-                                log_cb=lambda m: write_log(log_path, "    " + m)
                             )
+                            # Write internal request log from RequestManager
+                            if req_log:
+                                for line in req_log.splitlines():
+                                    write_log(log_path, "    " + line)
                             write_log(log_path, f"    Response: HTTP {status}")
                             write_log(log_path, f"    Attempts: {attempts_made}")
                             log_yaml(log_path, "    Response Headers:", resp_headers, indent=6)
@@ -316,6 +319,14 @@ def run(config: Path, out_dir: Path, max_workers: int | None, dry_run: bool, yes
                             except Exception as we:
                                 write_log(log_path, f"    Warning: failed to write response body file: {we}")
                         except Exception as he:
+                            # Write any internal request logs captured by RequestManager on error
+                            try:
+                                req_log = getattr(he, "request_log", None)
+                            except Exception:
+                                req_log = None
+                            if req_log:
+                                for line in str(req_log).splitlines():
+                                    write_log(log_path, "    " + line)
                             # Generic failure (including timeouts) are logged here
                             write_log(log_path, f"    ERROR: Request failed: {he}")
 
