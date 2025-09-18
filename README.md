@@ -37,7 +37,7 @@ payloadstash resolve path/to/config.yml --out ./out
 
 ---
 
-## Quick Start - Docker
+## Quick Start - Docker Execution
 
 - Prerequisites: Docker and Docker Compose (v2 preferred).
 - Build the image (one-time or when sources change):
@@ -52,6 +52,32 @@ Notes:
 - If you pass --out/-o, it is rewritten to /app/output automatically; otherwise the script adds --out /app/output for 'run'.
 - Relative config paths are assumed to be under ./config and are rewritten to /app/config/<path> in the container.
 - Before the app starts, the script prints the exact host directories being mounted.
+
+### Exporting to an Air-Gapped server using a Docker Image
+
+- Package all the files (whenever sources or dependencies change) on a host with internet access:
+  `sudo ./x-docker-package-payloadstash.sh`
+  This will create a ./packaged/payloadstash.zip file.
+- Copy the ./packaged/payloadstash.zip file to the air-gapped server.
+- On the air-gapped server, extract the package:
+  `unzip payloadstash.zip`
+  This will create a ./payloadstash/ directory.
+- Switch into ./payloadstash then load the image to Docker with: 
+  `sudo ./x-docker-load-payloadstash.sh`
+- Still from inside this directory, run the cli on the air-gapped server via Docker:
+  `x-docker-run-payloadstash.sh run config-example.yml`
+
+---
+
+## Quick Start - Developer Install
+
+If you are developing PayloadStash, you can install it in editable mode with this sequence of commands:
+
+- Do once per environment: `python -m pip install -e .`
+- Reinstall only when:
+    - dependencies change, or
+    - entry point names change.
+- Otherwise, edit code and rerun the CLI `payloadstash`, no reinstall needed.
 
 ---
 
@@ -743,16 +769,6 @@ StashConfig:
 
 * Failed requests are recorded, not fatal.
 * Resolved config written inside timestamped folder.
-
----
-
-## Developer Install
-
-- Do once per environment: `python -m pip install -e .`
-- Reinstall only when:
-    - dependencies change, or
-    - entry point names change.
-- Otherwise, edit code and rerun the CLI `payloadstash`, no reinstall needed.
 
 ---
 
