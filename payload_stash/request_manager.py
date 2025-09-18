@@ -170,6 +170,7 @@ class RequestManager:
                     log_lines.append(f"Retry: attempt {attempt}/{attempts} raised {et}: {e}. Not retryable; abort.")
                     try:
                         setattr(e, "request_log", "\n".join(log_lines))
+                        setattr(e, "attempts_made", attempt)
                     except Exception:
                         pass
                     raise
@@ -189,6 +190,7 @@ class RequestManager:
                     log_lines.append(f"Retry: attempts exhausted after {attempts} attempts; raising last error.")
                     try:
                         setattr(last_exc, "request_log", "\n".join(log_lines))
+                        setattr(last_exc, "attempts_made", attempt)
                     except Exception:
                         pass
                     raise last_exc
@@ -213,6 +215,7 @@ class RequestManager:
                     if last_exc is not None:
                         try:
                             setattr(last_exc, "request_log", "\n".join(log_lines))
+                            setattr(last_exc, "attempts_made", attempt)
                         except Exception:
                             pass
                         raise last_exc

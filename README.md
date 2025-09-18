@@ -268,9 +268,9 @@ Functions:
 - timestamp: returns the current UTC time in one of several formats.
 
 Usage forms:
-- { $func: timestamp, format: iso_8601 }
+- `{ $func: timestamp, format: iso_8601 }`
 - With control over when it is evaluated:
-  - { $func: timestamp, format: iso_8601, when: request }
+  - `{ $func: timestamp, format: iso_8601, when: request }`
 
 Supported formats for timestamp: epoch_ms, epoch_s, iso_8601.
 
@@ -280,7 +280,7 @@ When parameter:
 
 How deferral works:
 - During config resolution, request-time functions are preserved as a marker like:
-  {"$deferred": {"func": "timestamp", "format": "epoch_ms"}}
+  `{"$deferred": {"func": "timestamp", "format": "epoch_ms"}}`
 - At send-time, call the helper to resolve these markers in the object you are about to send:
 
 ```python
@@ -313,7 +313,7 @@ StashConfig:
 
 Dynamics:
 - Dynamics let you declare reusable ID or token patterns once and then materialize them anywhere in Headers, Query, or 
-Body using a special object form: { $dynamic: <patternName>, ... }.
+Body using a special object form: `{ $dynamic: <patternName>, ... }`.
 - Unlike functions (which call code), dynamics expand a named template you define under the top-level dynamics: section 
 of your YAML.
 
@@ -331,16 +331,16 @@ Where you declare them:
       teams: ["00", "01", "02", "03"]
   ```
 - patterns: A map of pattern names to a template string.
-- sets: Named lists used by ${choice:<setName>} placeholders inside templates.
+- sets: Named lists used by `${choice:<setName>}` placeholders inside templates.
 
 Template placeholders supported:
-- ${hex:N} — N random hexadecimal characters, uppercase A–F guaranteed.
-- ${alphanumeric:N} — N random characters from 0-9, A-Z, a-z.
-- ${numeric:N} — N random digits 0-9.
-- ${alpha:N} — N random letters A-Z, a-z.
-- ${uuidv4} — A standard UUID v4 string, e.g., 3f2b0b9a-3c03-4b0a-b4ad-5d9d3f6e45a7.
-- ${choice:setName} — Pick one random element from a named set, e.g., teams above returns one of ["00", "01", "02", "03"].
-- ${timestamp[:format]} — Current UTC timestamp; format options: iso_8601 (default), epoch_ms, epoch_s.
+- `${hex:N}` — N random hexadecimal characters, uppercase A–F guaranteed.
+- `${alphanumeric:N}` — N random characters from 0-9, A-Z, a-z.
+- `${numeric:N}` — N random digits 0-9.
+- `${alpha:N}` — N random letters A-Z, a-z.
+- `${uuidv4}` — A standard UUID v4 string, e.g., 3f2b0b9a-3c03-4b0a-b4ad-5d9d3f6e45a7.
+- `${choice:setName}` — Pick one random element from a named set, e.g., teams above returns one of ["00", "01", "02", "03"].
+- `${timestamp[:format]}` — Current UTC timestamp; format options: iso_8601 (default), epoch_ms, epoch_s.
 
 Using a dynamic in a request:
 - Resolve-time (default): materialize immediately during config resolution.
@@ -597,15 +597,16 @@ for every request executed.
 * `timestamp` – UTC timestamp when executed.
 * `status` – HTTP status code (or -1 if none).
 * `duration_ms` – request time in ms.
+* `attempts` – number of attempts made.
 
 **Example:**
 
 ```csv
-sequence,request,timestamp,status,duration_ms
-GetGeneralData,GetConfig,2025-09-17T15:42:11Z,200,123
-GetGeneralData,GetCatalog,2025-09-17T15:42:11Z,500,87
-GetPlayer01,GetState,2025-09-17T15:42:12Z,200,212
-GetPlayer01,GrantItem,2025-09-17T15:42:13Z,200,145
+sequence,request,timestamp,status,duration_ms,attempts
+seq001-GetGeneralData,req001-GetConfig,2025-09-17T15:42:11Z,200,123,1
+seq001-GetGeneralData,req002-GetCatalog,2025-09-17T15:42:11Z,500,87,1
+seq002-GetPlayer01,req001-GetState,2025-09-17T15:42:12Z,200,212,1
+seq002-GetPlayer01,req002-GrantItem,2025-09-17T15:42:13Z,200,145,1
 ```
 
 ---
@@ -757,24 +758,3 @@ StashConfig:
 
 Happy stashing!!️
 
-
-
----
-
-## Docker
-
-If you prefer to use Docker:
-
-- Build the image (one-time or when sources change):
-
-  ./x-docker-build-payloadstash.sh
-
-- Run commands inside the container (assumes the image is already built):
-
-  ./x-docker-run-payloadstash.sh validate my-config.yml
-  ./x-docker-run-payloadstash.sh run my-config.yml
-
-Notes:
-- The run script mounts ./config to /app/config and ./output to /app/output inside the container.
-- If you pass --out/-o, the path is rewritten to /app/output.
-- Relative config paths are assumed to be under ./config.

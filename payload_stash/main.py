@@ -99,6 +99,9 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool):
     # Prepare log file path
     log_path = run_root / f"{config.stem}-run.log"
 
+    # Prepare results CSV path
+    results_csv_path = run_root / f"{config.stem}-results.csv"
+
     # 5) Print summary of what the run config will do and the output location
     sequences = cfg.StashConfig.Sequences
     total_requests = sum(len(s.Requests) for s in sequences)
@@ -135,6 +138,15 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool):
 
             start_run_log(log_path, ts, sc_name, resolved_path)
 
+            # Initialize results CSV with header
+            try:
+                import csv
+                with results_csv_path.open('w', encoding='utf-8', newline='') as cf:
+                    w = csv.writer(cf)
+                    w.writerow(["sequence", "request", "timestamp", "status", "duration_ms", "attempts"])
+            except Exception as e:
+                write_log(log_path, f"Warning: failed to initialize results CSV '{results_csv_path}': {e}")
+
             # Pull defaults (including URLRoot) and flow control
             sc_resolved = resolved.get("StashConfig", {})
             defaults_resolved = sc_resolved.get("Defaults", {})
@@ -148,6 +160,19 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool):
 
             seq_dicts = sc_resolved.get("Sequences", [])
             total_seq = len(seq_dicts)
+            from threading import Lock
+            csv_lock = Lock()
+            import csv as _csv
+
+            def _append_result_row(seq_name: str, req_name: str, ts_iso: str, status_code: int, duration_ms: int, attempts: int) -> None:
+                try:
+                    with csv_lock:
+                        with results_csv_path.open('a', encoding='utf-8', newline='') as cf:
+                            w = _csv.writer(cf)
+                            w.writerow([seq_name, req_name, ts_iso, status_code, duration_ms, attempts])
+                except Exception as e:
+                    write_log(log_path, f"Warning: failed to append to results CSV: {e}")
+
             for i, seq_d in enumerate(seq_dicts, start=1):
                 s_name = seq_d.get("Name")
                 s_type = seq_d.get("Type")
@@ -264,6 +289,11 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool):
                         pass
                     lines.append(f"  Request {idx}/{total_in_seq}: {r_key}")
                     lines.append(f"    URL: {full_url}")
+                    # Capture start timestamp (UTC, ISO8601 Z) and log it
+                    start_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                    lines.append(f"    Start: {start_iso}")
+                    seq_name_csv = f"{seq_dir_name}"
+                    req_name_csv = f"req{idx:03d}-{r_key}"
                     # Log Resolved Request
                     y_req = yaml_to_string(resolved_request_block).splitlines()
                     lines.append("    Resolved Request:")
@@ -278,10 +308,16 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool):
 
                     if dry_run:
                         lines.append("    DRY-RUN: would make request (skipped)")
+                        # Write CSV row for dry-run with status -1 and duration 0
+                        try:
+                            _append_result_row(seq_name_csv, req_name_csv, start_iso, -1, 0, 0)
+                        except Exception:
+                            pass
                         return idx, lines
 
                     # Execute request
                     try:
+                        t0 = time.perf_counter()
                         status, resp_headers, resp_text, attempts_made, req_log = rm.request(
                             method=method,
                             url=full_url,
@@ -326,6 +362,13 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool):
                             lines.append(f"    Response Body: written to {resp_out_path}")
                         except Exception as we:
                             lines.append(f"    Warning: failed to write response body file: {we}")
+                        # Record success to CSV
+                        try:
+                            t1 = time.perf_counter()
+                            duration_ms = int(round((t1 - t0) * 1000))
+                            _append_result_row(seq_name_csv, req_name_csv, start_iso, int(status), duration_ms, attempts_made)
+                        except Exception:
+                            pass
                     except Exception as he:
                         # Any internal request logs captured by RequestManager on error
                         try:
@@ -336,6 +379,14 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool):
                             for line in str(req_log).splitlines():
                                 lines.append("    " + line)
                         lines.append(f"    ERROR: Request failed: {he}")
+                        # Record failure to CSV (-1 status)
+                        try:
+                            t1 = time.perf_counter()
+                            duration_ms = int(round((t1 - t0) * 1000))
+                            attempts_fail = getattr(he, "attempts_made", 1)
+                            _append_result_row(seq_name_csv, req_name_csv, start_iso, -1, duration_ms, int(attempts_fail) if isinstance(attempts_fail, (int, float)) else 1)
+                        except Exception:
+                            pass
                     return idx, lines
 
                 # Execute sequentially or concurrently
