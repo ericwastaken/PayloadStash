@@ -7,6 +7,8 @@ from typing import Any, Dict, List, Optional, Union
 import yaml
 from pydantic import BaseModel, Field, ValidationError, ConfigDict, model_validator, field_validator
 
+from . import config_utility as cfgutil
+
 
 # Enums for constrained values
 class Method(str, Enum):
@@ -194,6 +196,74 @@ def _copy_map(m: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     return dict(m)
 
 
+def _resolve_func_obj(obj: Dict[str, Any]) -> Any:
+    """
+    Evaluate a special function-call object embedded in YAML sections.
+    Supported forms:
+      - {"$func": "timestamp", "format": "iso_8601", "when": "resolve|request"}
+      - {"$timestamp": "epoch_ms"}
+      - {"$timestamp": {"format": "epoch_ms", "when": "request"}}
+    If when == "request", return a deferred marker that can be resolved later using
+    cfgutil.resolve_deferred at request time.
+    """
+    # Normalize different syntaxes into (func, params, when)
+    func_name: Optional[str] = None
+    params: Dict[str, Any] = {}
+    when: str = "resolve"
+
+    if "$func" in obj:
+        func_name = obj.get("$func")
+        # pull params except special keys
+        for k, v in obj.items():
+            if k not in {"$func", "when"}:
+                params[k] = v
+        when = obj.get("when", "resolve")
+    elif "$timestamp" in obj:
+        func_name = "timestamp"
+        ts_val = obj.get("$timestamp")
+        if isinstance(ts_val, dict):
+            params.update({k: v for k, v in ts_val.items() if k != "when"})
+            when = ts_val.get("when", obj.get("when", "resolve"))
+        else:
+            params["format"] = ts_val or "iso_8601"
+            when = obj.get("when", "resolve")
+    else:
+        # Not a function object
+        return obj
+
+    # Defaults/aliases for timestamp
+    if func_name == "timestamp":
+        fmt = params.get("format") or params.get("fmt") or "iso_8601"
+        if when == "request":
+            # Return a deferred marker that downstream can evaluate
+            return {"$deferred": {"func": "timestamp", "format": fmt}}
+        # resolve immediately
+        return cfgutil.timestamp(fmt)
+
+    raise ValueError(f"Unknown function in config: {func_name}")
+
+
+def _resolve_values(value: Any) -> Any:
+    """Recursively resolve any function-call objects inside dicts/lists/primitives.
+
+    Notes:
+    - Objects with "$deferred" are preserved for request-time resolution.
+    """
+    if isinstance(value, dict):
+        # Don't touch already-deferred nodes
+        if "$deferred" in value:
+            return value
+        # First check if this dict itself is a function-call object
+        if "$func" in value or "$timestamp" in value:
+            return _resolve_func_obj(value)
+        # Else resolve each entry
+        return {k: _resolve_values(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_resolve_values(v) for v in value]
+    # primitives unchanged
+    return value
+
+
 def build_resolved_config_dict(cfg: TopLevelConfig) -> Dict[str, Any]:
     """Build a fully-resolved config dict with Defaults and Forced applied into each Request.
 
@@ -232,11 +302,11 @@ def build_resolved_config_dict(cfg: TopLevelConfig) -> Dict[str, Any]:
         if defaults.URLRoot is not None:
             d["URLRoot"] = defaults.URLRoot
         if defaults.Headers is not None:
-            d["Headers"] = _copy_map(defaults.Headers)
+            d["Headers"] = _resolve_values(_copy_map(defaults.Headers))
         if defaults.Body is not None:
-            d["Body"] = _copy_map(defaults.Body)
+            d["Body"] = _resolve_values(_copy_map(defaults.Body))
         if defaults.Query is not None:
-            d["Query"] = _copy_map(defaults.Query)
+            d["Query"] = _resolve_values(_copy_map(defaults.Query))
         if _provided(defaults, 'RetryCfg'):
             if defaults.RetryCfg is None:
                 d["Retry"] = None
@@ -250,11 +320,11 @@ def build_resolved_config_dict(cfg: TopLevelConfig) -> Dict[str, Any]:
         if forced.URLRoot is not None:
             f["URLRoot"] = forced.URLRoot
         if forced.Headers is not None:
-            f["Headers"] = _copy_map(forced.Headers)
+            f["Headers"] = _resolve_values(_copy_map(forced.Headers))
         if forced.Body is not None:
-            f["Body"] = _copy_map(forced.Body)
+            f["Body"] = _resolve_values(_copy_map(forced.Body))
         if forced.Query is not None:
-            f["Query"] = _copy_map(forced.Query)
+            f["Query"] = _resolve_values(_copy_map(forced.Query))
         if _provided(forced, 'RetryCfg'):
             # Generally Forced.Retry is not expected; but if provided, include for transparency (including explicit null)
             if forced.RetryCfg is None:
@@ -293,6 +363,11 @@ def build_resolved_config_dict(cfg: TopLevelConfig) -> Dict[str, Any]:
             if forced is not None and forced.Query is not None:
                 query = query or {}
                 query.update(forced.Query)
+
+            # resolve any function-call objects after merges
+            headers = _resolve_values(headers) if headers is not None else None
+            body = _resolve_values(body) if body is not None else None
+            query = _resolve_values(query) if query is not None else None
 
             # resolve retry precedence with explicit-null awareness
             retry_set = False

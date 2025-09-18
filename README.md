@@ -163,6 +163,19 @@ StashConfig:
   <HeaderKey>: <string>
   ...repeat as needed...
 
+Dynamics:
+  patterns:
+    userid_hex_prefixed:
+      template: "1234${hex:20}"
+    userid_hex_structured:
+      template: "1234${hex:22}${choice:teams:1}${hex:4}${hex:2}00"
+    userid_uuid_v4:
+      template: "${uuidv4}"
+
+  sets:
+    teams: ["0","1","2","3"]
+
+
 StashConfig:
   Name: <string>
 
@@ -170,6 +183,9 @@ StashConfig:
     URLRoot?: <string>
     Headers?: { <k>: <v>, ... }
     Body?:    { <k>: <v>, ... }
+    # Example: compute a timestamp at resolve-time
+    # Body.timestamp can call the built-in timestamp() helper:
+    #   timestamp: { $func: timestamp, format: iso_8601 }
     Query?:   { <k>: <v>, ... }
 
   Forced?:
@@ -214,6 +230,58 @@ StashConfig:
               RetryOnStatus?: [<int>, ...]
               RetryOnNetworkErrors?: <bool>
               RetryOnTimeouts?: <bool>
+```
+
+### Config utilities (function calls inside configs)
+
+You can compute certain values using a special object syntax. The following helper is available:
+
+- timestamp: returns the current UTC time in one of several formats.
+
+Usage forms:
+- { $func: timestamp, format: iso_8601 }
+- { $timestamp: epoch_ms }
+- With control over when it is evaluated:
+  - { $func: timestamp, format: iso_8601, when: request }
+  - { $timestamp: { format: epoch_ms, when: request } }
+
+Supported formats: epoch_ms, epoch_s, iso_8601.
+
+When parameter:
+- when: resolve (default) – evaluate during config resolution (e.g., when writing *-resolved.yml).
+- when: request – defer evaluation until the moment you are about to send the request.
+
+How deferral works:
+- During config resolution, request-time functions are preserved as a marker like:
+  {"$deferred": {"func": "timestamp", "format": "epoch_ms"}}
+- At send-time, call the helper to resolve these markers in the object you are about to send:
+
+```python
+from payload_stash.config_utility import resolve_deferred
+
+ready_headers = resolve_deferred(headers)
+ready_query = resolve_deferred(query)
+ready_body = resolve_deferred(body)
+```
+
+Example adding timestamps with both timings:
+
+```yml
+StashConfig:
+  Name: WithTimestamp
+  Defaults:
+    Body:
+      ts_resolve: { $func: timestamp, format: iso_8601 }
+      ts_request: { $timestamp: { format: epoch_ms, when: request } }
+  Sequences:
+    - Name: OnlySeq
+      Type: Sequential
+      Requests:
+        - Ping:
+            Method: GET
+            URLPath: /health
+            Body:
+              now_req: { $func: timestamp, format: iso_8601, when: request }
 ```
 
 ---

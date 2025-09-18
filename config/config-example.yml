@@ -7,6 +7,13 @@ common_headers: &common_headers
 common_body: &common_body
   someProperty: someValue
 
+dynamics:
+  patterns:
+    user_structured:
+      template: "1234${hex:22}${choice:teams:2}00"
+  sets:
+    teams: ["00","01","02","03"]
+
 StashConfig:
   # Unique name to identify this configuration
   Name: Example
@@ -45,7 +52,11 @@ StashConfig:
             URLPath: /state        # API endpoint path
             Body: # Request body
               someOther: value2
+              timestamp_resolve_time: { $timestamp: epoch_ms }
+              timestamp_request_time: { $timestamp: { format: epoch_ms, when: request } }
             Retry: Null           # Disable retry for this request
         - GetConfig: # Second request
             Method: GET
             URLPath: /config
+            Body:
+              ts_iso_request_time: { $func: timestamp, format: iso_8601, when: request }
