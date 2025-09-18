@@ -35,10 +35,10 @@ def dynamic_expand(template: str, sets: Optional[Dict[str, List[str]]] = None) -
     Expand a dynamic template string using supported placeholders.
 
     Supported placeholders:
-      - ${hex:N}             → N random hex characters (uppercase A–F)
-      - ${uuidv4}            → a UUID v4 string
-      - ${choice:setName}    → pick 1 element from sets[setName]
-      - ${choice:setName:K}  → pick K elements independently and concatenate
+      - ${hex:N}                → N random hex characters (uppercase A–F)
+      - ${uuidv4}               → a UUID v4 string
+      - ${choice:setName}       → pick 1 element from sets[setName]
+      - ${timestamp[:format]}   → current UTC timestamp; format one of epoch_ms | epoch_s | iso_8601 (default iso_8601)
     """
     sets = sets or {}
 
@@ -53,18 +53,19 @@ def dynamic_expand(template: str, sets: Optional[Dict[str, List[str]]] = None) -
             return "".join(random.choice(_HEX_CHARS) for _ in range(n))
         if name == "uuidv4":
             return str(uuid.uuid4())
+        if name == "timestamp":
+            fmt = arg1 or "iso_8601"
+            return str(timestamp(fmt))
         if name == "choice":
             if not arg1:
-                raise ValueError("${choice:setName[:K] } requires a set name")
+                raise ValueError("${choice:setName} requires a set name")
+            if arg2 is not None:
+                # Disallow multi-selection/repeat for choice to enforce single selection
+                raise ValueError("${choice:setName} does not support multiple selections")
             pool = sets.get(arg1)
             if pool is None:
                 raise ValueError(f"Unknown choice set: {arg1}")
-            k = 1
-            if arg2:
-                if not arg2.isdigit():
-                    raise ValueError(f"Repeat K for choice must be integer; got: {arg2!r}")
-                k = int(arg2)
-            return "".join(random.choice(pool) for _ in range(k))
+            return random.choice(pool)
         # Unknown placeholder: leave as-is to avoid data loss
         return m.group(0)
 

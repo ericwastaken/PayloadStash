@@ -308,6 +308,7 @@ Template placeholders supported:
 - ${hex:N} — N random hexadecimal characters, uppercase A–F guaranteed.
 - ${uuidv4} — A standard UUID v4 string, e.g., 3f2b0b9a-3c03-4b0a-b4ad-5d9d3f6e45a7.
 - ${choice:setName} — Pick one random element from a named set, e.g., teams above returns one of ["00", "01", "02", "03"].
+- ${timestamp[:format]} — Current UTC timestamp; format options: iso_8601 (default), epoch_ms, epoch_s.
 
 Using a dynamic in a request:
 - Resolve-time (default): materialize immediately during config resolution.
