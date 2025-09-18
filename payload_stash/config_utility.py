@@ -36,6 +36,9 @@ def dynamic_expand(template: str, sets: Optional[Dict[str, List[str]]] = None) -
 
     Supported placeholders:
       - ${hex:N}                → N random hex characters (uppercase A–F)
+      - ${alphanumeric:N}       → N random characters 0-9 A-Z a-z
+      - ${numeric:N}            → N random digits 0-9
+      - ${alpha:N}              → N random letters A-Z a-z
       - ${uuidv4}               → a UUID v4 string
       - ${choice:setName}       → pick 1 element from sets[setName]
       - ${timestamp[:format]}   → current UTC timestamp; format one of epoch_ms | epoch_s | iso_8601 (default iso_8601)
@@ -66,6 +69,24 @@ def dynamic_expand(template: str, sets: Optional[Dict[str, List[str]]] = None) -
             if pool is None:
                 raise ValueError(f"Unknown choice set: {arg1}")
             return random.choice(pool)
+        if name == "alphanumeric":
+            if not arg1 or not arg1.isdigit():
+                raise ValueError(f"${{alphanumeric:N}} requires integer N; got: {arg1!r}")
+            n = int(arg1)
+            chars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+            return "".join(random.choice(chars) for _ in range(n))
+        if name == "numeric":
+            if not arg1 or not arg1.isdigit():
+                raise ValueError(f"${{numeric:N}} requires integer N; got: {arg1!r}")
+            n = int(arg1)
+            chars = "0123456789"
+            return "".join(random.choice(chars) for _ in range(n))
+        if name == "alpha":
+            if not arg1 or not arg1.isdigit():
+                raise ValueError(f"${{alpha:N}} requires integer N; got: {arg1!r}")
+            n = int(arg1)
+            chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+            return "".join(random.choice(chars) for _ in range(n))
         # Unknown placeholder: leave as-is to avoid data loss
         return m.group(0)
 

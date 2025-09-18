@@ -317,6 +317,9 @@ Where you declare them:
 
 Template placeholders supported:
 - ${hex:N} — N random hexadecimal characters, uppercase A–F guaranteed.
+- ${alphanumeric:N} — N random characters from 0-9, A-Z, a-z.
+- ${numeric:N} — N random digits 0-9.
+- ${alpha:N} — N random letters A-Z, a-z.
 - ${uuidv4} — A standard UUID v4 string, e.g., 3f2b0b9a-3c03-4b0a-b4ad-5d9d3f6e45a7.
 - ${choice:setName} — Pick one random element from a named set, e.g., teams above returns one of ["00", "01", "02", "03"].
 - ${timestamp[:format]} — Current UTC timestamp; format options: iso_8601 (default), epoch_ms, epoch_s.
@@ -424,7 +427,6 @@ If the same key appears in multiple merged maps, the last one wins. After anchor
 
 * `Sequences` are executed **in the order listed**.
 * Each sequence has a `Type`:
-
     * **Sequential**: requests execute one-at-a-time.
     * **Concurrent**: requests execute in parallel (async/await). `ConcurrencyLimit` caps fan-out.
 * A failed request does not stop the run. Its response, HTTP status, and timing are written; execution continues.
@@ -619,12 +621,16 @@ out/PXXX-Tester-01/2025-09-17T15-42-10Z/PXXX-Tester-01-log.txt
 ## CLI Usage
 
 ```bash
-payloadstash run CONFIG.yml --out ./out [--max-workers 16]
+payloadstash run CONFIG.yml --out ./out [--max-workers 16] [--dry-run] [--yes]
 
 payloadstash validate CONFIG.yml
 
 payloadstash resolve CONFIG.yml --out ./out
 ```
+
+Flags:
+- --dry-run: Resolve and log actions without making HTTP requests.
+- --yes: Automatically continue without the interactive "Continue? [y/N]" prompt.
 
 Exit codes:
 

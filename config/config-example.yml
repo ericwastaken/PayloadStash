@@ -13,6 +13,8 @@ dynamics:
   patterns:
     user_structured:
       template: "1234${hex:22}${choice:teams}00"
+    user_name:
+      template: "user-${alpha:6}"
   sets:
     teams: ["00","01","02","03"]
 
@@ -22,7 +24,7 @@ StashConfig:
 
   # Default settings applied to all requests unless overridden
   Defaults:
-    URLRoot: https://api.restful-api.dev
+    URLRoot: https://api.restful-api.dev # Open Test API endpoint
     FlowControl:
       DelaySeconds: 2
       TimeoutSeconds: 2
@@ -35,10 +37,10 @@ StashConfig:
     Retry:
       Attempts: 4                    # Number of retry attempts
       BackoffStrategy: exponential   # Exponential backoff between retries
-      BackoffSeconds: 0.5           # Initial backoff duration
-      Multiplier: 2.0               # Multiplier for exponential backoff
-      MaxBackoffSeconds: 10         # Maximum backoff duration
-      Jitter: true                  # Add randomness to backoff time
+      BackoffSeconds: 0.5            # Initial backoff duration
+      Multiplier: 2.0                # Multiplier for exponential backoff
+      MaxBackoffSeconds: 10          # Maximum backoff duration
+      Jitter: true                   # Add randomness to backoff time
       RetryOnStatus: [ 429, 500, 502, 503, 504 ]  # HTTP status codes to retry on
 
   # Forced settings that override request-specific settings
@@ -60,6 +62,7 @@ StashConfig:
               someOther: value2
               timestamp_resolve_time: { $timestamp: epoch_ms }
               timestamp_request_time: { $timestamp: { format: epoch_ms, when: request } }
+              username: { $dynamic: user_name }
             Retry: Null           # Disable retry for this request
         - GetObjects_3_5_10: # Second request
             Method: GET
@@ -69,5 +72,3 @@ StashConfig:
               - 3
               - 5
               - 10
-            Body:
-              ts_iso_request_time: { $func: timestamp, format: iso_8601, when: request }
