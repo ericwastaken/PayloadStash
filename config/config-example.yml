@@ -20,12 +20,12 @@ StashConfig:
   # Unique name to identify this configuration
   Name: Example
 
-  # Optional pacing between requests/sequences
-  FlowControl:
-    DelaySeconds: 2
-
   # Default settings applied to all requests unless overridden
   Defaults:
+    URLRoot: https://api.example.com
+    FlowControl:
+      DelaySeconds: 2
+      TimeoutSeconds: 2
     # Default headers including common headers
     Headers:
       <<: *common_headers

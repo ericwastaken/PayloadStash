@@ -59,6 +59,35 @@ class SectionMaps(BaseModel):
     RetryCfg: Optional[Retry] = Field(None, alias='Retry')
 
 
+class FlowControlCfg(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    DelaySeconds: Optional[int] = Field(None, ge=0)
+    TimeoutSeconds: Optional[int] = Field(None, ge=0)
+
+
+class DefaultsSection(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    # Required Defaults
+    URLRoot: str
+    FlowControl: FlowControlCfg
+
+    # Optional Defaults
+    Headers: Optional[Dict[str, Any]] = None
+    Body: Optional[Dict[str, Any]] = None
+    Query: Optional[Dict[str, Any]] = None
+    RetryCfg: Optional[Retry] = Field(None, alias='Retry')
+
+
+class ForcedSection(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    Headers: Optional[Dict[str, Any]] = None
+    Body: Optional[Dict[str, Any]] = None
+    Query: Optional[Dict[str, Any]] = None
+    RetryCfg: Optional[Retry] = Field(None, alias='Retry')
+
+
 class Request(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
@@ -67,7 +96,7 @@ class Request(BaseModel):
     Headers: Optional[Dict[str, Any]] = None
     Body: Optional[Dict[str, Any]] = None
     Query: Optional[Dict[str, Any]] = None
-    TimeoutSeconds: Optional[int] = Field(None, ge=0)
+    FlowControl: Optional[FlowControlCfg] = None
     RetryCfg: Optional[Retry] = Field(None, alias='Retry')
 
 
@@ -129,11 +158,20 @@ class StashConfig(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
     Name: str
-    Defaults: Optional[SectionMaps] = None
-    Forced: Optional[SectionMaps] = None
-    FlowControl: Optional[FlowControlCfg] = None
+    Defaults: DefaultsSection
+    Forced: Optional[ForcedSection] = None
     RetryCfg: Optional[Retry] = Field(None, alias='Retry')
     Sequences: List[Sequence]
+
+    @model_validator(mode='after')
+    def check_defaults_urlroot(self) -> 'StashConfig':
+        # Enforce that Defaults.FlowControl has both fields (at least require presence, values validated by FlowControlCfg)
+        if self.Defaults is None or self.Defaults.FlowControl is None:
+            raise ValueError("Defaults.FlowControl is required with DelaySeconds and TimeoutSeconds integers")
+        # Additionally ensure URLRoot non-empty
+        if not isinstance(self.Defaults.URLRoot, str) or not self.Defaults.URLRoot.strip():
+            raise ValueError("Defaults.URLRoot is required and must be a non-empty string")
+        return self
 
 
 class DynamicPattern(BaseModel):
@@ -366,6 +404,13 @@ def build_resolved_config_dict(cfg: TopLevelConfig) -> Dict[str, Any]:
         d: Dict[str, Any] = {}
         if defaults.URLRoot is not None:
             d["URLRoot"] = defaults.URLRoot
+        if defaults.FlowControl is not None:
+            fc: Dict[str, Any] = {}
+            if defaults.FlowControl.DelaySeconds is not None:
+                fc["DelaySeconds"] = defaults.FlowControl.DelaySeconds
+            if defaults.FlowControl.TimeoutSeconds is not None:
+                fc["TimeoutSeconds"] = defaults.FlowControl.TimeoutSeconds
+            d["FlowControl"] = fc
         if defaults.Headers is not None:
             d["Headers"] = _resolve_values(_copy_map(defaults.Headers), dyn)
         if defaults.Body is not None:
@@ -382,8 +427,6 @@ def build_resolved_config_dict(cfg: TopLevelConfig) -> Dict[str, Any]:
 
     if forced is not None:
         f: Dict[str, Any] = {}
-        if forced.URLRoot is not None:
-            f["URLRoot"] = forced.URLRoot
         if forced.Headers is not None:
             f["Headers"] = _resolve_values(_copy_map(forced.Headers), dyn)
         if forced.Body is not None:
@@ -399,13 +442,6 @@ def build_resolved_config_dict(cfg: TopLevelConfig) -> Dict[str, Any]:
         if f:
             out["StashConfig"]["Forced"] = f
 
-    # FlowControl if provided
-    if hasattr(sc, 'FlowControl') and sc.FlowControl is not None:
-        fc: Dict[str, Any] = {}
-        if sc.FlowControl.DelaySeconds is not None:
-            fc["DelaySeconds"] = sc.FlowControl.DelaySeconds
-        if fc:
-            out["StashConfig"]["FlowControl"] = fc
 
     # Sequences with resolved requests
     seq_list: List[Dict[str, Any]] = []
@@ -469,8 +505,23 @@ def build_resolved_config_dict(cfg: TopLevelConfig) -> Dict[str, Any]:
                 inner["Body"] = body
             if query is not None:
                 inner["Query"] = query
-            if req.TimeoutSeconds is not None:
-                inner["TimeoutSeconds"] = req.TimeoutSeconds
+            # Always include effective URLRoot from Defaults
+            if defaults and defaults.URLRoot:
+                inner["URLRoot"] = defaults.URLRoot
+            # Include effective FlowControl (Defaults overridden by per-request)
+            fc_eff: Dict[str, Any] = {}
+            if defaults and defaults.FlowControl is not None:
+                if defaults.FlowControl.DelaySeconds is not None:
+                    fc_eff["DelaySeconds"] = defaults.FlowControl.DelaySeconds
+                if defaults.FlowControl.TimeoutSeconds is not None:
+                    fc_eff["TimeoutSeconds"] = defaults.FlowControl.TimeoutSeconds
+            if req.FlowControl is not None:
+                if req.FlowControl.DelaySeconds is not None:
+                    fc_eff["DelaySeconds"] = req.FlowControl.DelaySeconds
+                if req.FlowControl.TimeoutSeconds is not None:
+                    fc_eff["TimeoutSeconds"] = req.FlowControl.TimeoutSeconds
+            if fc_eff:
+                inner["FlowControl"] = fc_eff
 
             if retry_set:
                 if retry_value is None:

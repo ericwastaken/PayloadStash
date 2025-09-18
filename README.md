@@ -180,8 +180,15 @@ Dynamics:
 StashConfig:
   Name: <string>
 
-  Defaults?:
-    URLRoot?: <string>
+  Defaults:
+    # Required Defaults
+    URLRoot: <string>
+    FlowControl:
+      # Number of seconds in between sequences and requests (default: 0)
+      DelaySeconds: <int>
+      TimeoutSeconds: <int>
+      
+    # Optional Defaults
     Headers?: { <k>: <v>, ... }
     Body?:    { <k>: <v>, ... }
     # Example: compute a timestamp at resolve-time
@@ -193,10 +200,6 @@ StashConfig:
     Headers?: { <k>: <v>, ... }
     Body?:    { <k>: <v>, ... }
     Query?:   { <k>: <v>, ... }
-  
-  FlowControl:
-    # Optional: number of seconds in between sequences and requests (default: 1)
-    DelaySeconds?: <int> 
   
   # Optional global retry policy (applies when a request omits Retry)
   Retry?:
@@ -222,7 +225,9 @@ StashConfig:
             Headers?: { <k>: <v>, ... }
             Body?:    { <k>: <v>, ... }
             Query?:   { <k>: <v>, ... }
-            TimeoutSeconds?: <int>
+            FlowControl?:
+              DelaySeconds?: <int>
+              TimeoutSeconds?: <int>
             # Optional per-request retry policy (overrides Defaults.Retry if present)
             Retry?:
               Attempts: <int>
@@ -385,7 +390,7 @@ PayloadStash computes each request’s **effective** sections in this order:
 2. If the request defines a section, copy it in.
 3. If the request omits a section, copy from **Defaults**.
 4. **Forced** is merged last and overrides.
-5. `URLRoot` comes from request (if supported) or Defaults.
+5. `URLRoot` comes from Defaults only. It is not allowed inside a Request.
 
 Example: If `Defaults.Body.team = "blue"`, `Request.Body.team` omitted, and `Forced.Body.team = "green"`, 
 then `team == "green"`.
@@ -424,20 +429,28 @@ If the same key appears in multiple merged maps, the last one wins. After anchor
     * **Concurrent**: requests execute in parallel (async/await). `ConcurrencyLimit` caps fan-out.
 * A failed request does not stop the run. Its response, HTTP status, and timing are written; execution continues.
 
-## Flow Control (optional)
+## Flow Control
 
-The FlowControl block lets you introduce small deliberate delays to pace your run.
+Control pacing and client timeouts via a FlowControl block.
 
-- DelaySeconds: Optional non-negative integer. Default is 1.
-- Applies between consecutive requests inside a sequence and when advancing from one sequence to the next.
+Location:
+- Required at Defaults: Defaults.FlowControl with both fields present.
+- Optional per-request override at Request.FlowControl (either field may be provided to override that aspect for the request).
 
-Example:
+Fields:
+- DelaySeconds: Non-negative integer. Delay applied between requests and when advancing to the next sequence.
+- TimeoutSeconds: Non-negative integer. Client-side request timeout.
+
+Example (Defaults and per-request override):
 
 ```yml
 StashConfig:
-  Name: WithDelay
-  FlowControl:
-    DelaySeconds: 2  # wait ~2s between requests and between sequences
+  Name: WithDelayAndTimeout
+  Defaults:
+    URLRoot: https://api.example.com
+    FlowControl:
+      DelaySeconds: 1
+      TimeoutSeconds: 5
   Sequences:
     - Name: A
       Type: Sequential
@@ -448,6 +461,9 @@ StashConfig:
         - Second:
             Method: GET
             URLPath: /b
+            FlowControl:
+              TimeoutSeconds: 1   # override only timeout for this request
+              # DelaySeconds omitted -> uses Defaults.FlowControl.DelaySeconds
     - Name: B
       Type: Concurrent
       ConcurrencyLimit: 3
@@ -623,9 +639,12 @@ Exit codes:
 ## Validation Rules
 
 * `StashConfig.Name` required.
+* `StashConfig.Defaults.URLRoot` required.
+* `StashConfig.Defaults.FlowControl` required (must include DelaySeconds and TimeoutSeconds).
 * At least one sequence.
 * Each sequence must have Name, Type, and at least one Request.
 * Each request must have one key, Method, and URLPath.
+* URLRoot is not allowed inside a Request.
 * Headers, Body, Query must be maps.
 * ConcurrencyLimit is only allowed for Type=Concurrent and must be >0 if present.
 
@@ -638,6 +657,8 @@ Exit codes:
 ```yml
 StashConfig:
   Name: MiniRun
+  Defaults:
+    URLRoot: https://api.example.com
   Sequences:
     - Name: OnlySeq
       Type: Sequential

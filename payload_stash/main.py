@@ -52,11 +52,12 @@ def validate(config: Path, writeresolved: bool):
         sys.exit(1)
 
 
-@main.command(help="Run a PayloadStash config. Phase 1: validate, resolve, and write the resolved config; print a summary.")
+@main.command(help="Run a PayloadStash config: validate, resolve, write resolved, then process sequences and requests.")
 @click.argument("config", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.option("--out", "out_dir", required=True, type=click.Path(file_okay=False, path_type=Path), help="Output directory root for run artifacts.")
 @click.option("--max-workers", type=int, required=False, help="Optional upper bound for concurrency across the whole run.")
-def run(config: Path, out_dir: Path, max_workers: int | None):
+@click.option("--dry-run", is_flag=True, help="Resolve request configs and log actions, but do not actually make HTTP requests.")
+def run(config: Path, out_dir: Path, max_workers: int | None, dry_run: bool):
     # 1) Basic argument validation
     if out_dir is None:
         click.echo("Error: --out is required", err=True)
@@ -81,7 +82,6 @@ def run(config: Path, out_dir: Path, max_workers: int | None):
 
     # 3) Determine run folder
     sc_name = cfg.StashConfig.Name
-    # Timestamp like 2025-09-17T15-42-10Z per README (dashes in the time portion)
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
     run_root = out_dir / sc_name / ts
 
@@ -104,6 +104,9 @@ def run(config: Path, out_dir: Path, max_workers: int | None):
         click.echo(f"Error: failed to write resolved config: {e}", err=True)
         sys.exit(9)
 
+    # Prepare log file path
+    log_path = run_root / f"{config.stem}-run.log"
+
     # 5) Print summary of what the run config will do and the output location
     sequences = cfg.StashConfig.Sequences
     total_requests = sum(len(s.Requests) for s in sequences)
@@ -115,19 +118,178 @@ def run(config: Path, out_dir: Path, max_workers: int | None):
         click.echo(f"  Max Workers:     {max_workers}")
     click.echo(f"  Output folder:   {run_root}")
     click.echo(f"  Resolved config: {resolved_path}")
-    click.echo("-- Stopping here by design (phase 1). No HTTP requests were sent.")
+    click.echo(f"  Log file:        {log_path}")
+    if dry_run:
+        click.echo("  Mode:            DRY-RUN (no HTTP calls)")
 
     # 6) User confirmation prompt
     try:
-        # Print exactly as requested (leading space, no colon)
-        click.echo(" Continue? [y/N]", nl=False)
+        click.echo(" Continue? [y/N]: ", nl=False)
         resp = click.get_text_stream('stdin').readline().strip().lower()
         if resp in ("y", "yes"):
             click.echo(f"\nProcessing {sc_name}")
+
+            from .utility import start_run_log, write_log, log_yaml, write_yaml_file
+            from .config_utility import resolve_deferred
+            import time
+            from urllib import request as urlrequest
+            from urllib import parse as urlparse
+            import json
+            import socket
+
+            start_run_log(log_path, ts, sc_name, resolved_path, max_workers)
+
+            # Pull defaults (including URLRoot) and flow control
+            sc_resolved = resolved.get("StashConfig", {})
+            defaults_resolved = sc_resolved.get("Defaults", {})
+            url_root: str = defaults_resolved.get("URLRoot") or ""
+            flow_cfg_defaults = (defaults_resolved.get("FlowControl") or {})
+            default_delay = flow_cfg_defaults.get("DelaySeconds")
+            default_timeout = flow_cfg_defaults.get("TimeoutSeconds")
+            # set a safe default pacing when unspecified
+            if default_delay is None:
+                default_delay = 0
+
+            seq_dicts = sc_resolved.get("Sequences", [])
+            total_seq = len(seq_dicts)
+            for i, seq_d in enumerate(seq_dicts, start=1):
+                s_name = seq_d.get("Name")
+                s_type = seq_d.get("Type")
+                s_conc = seq_d.get("ConcurrencyLimit")
+                msg = f"Processing sequence {i}/{total_seq}: {s_name} (Type={s_type}"
+                if s_conc is not None:
+                    msg += f", ConcurrencyLimit={s_conc}"
+                msg += ")"
+                click.echo(msg)
+                write_log(log_path, msg)
+
+                # Only Sequential supported for now (issue says do not implement Retry yet and no concurrency requirement here)
+                req_items = seq_d.get("Requests", [])
+                for j, req_item in enumerate(req_items, start=1):
+                    # req_item is like { Key: {Method, URLPath, Headers, Body, Query, FlowControl?, Retry?} }
+                    if not isinstance(req_item, dict) or len(req_item) != 1:
+                        write_log(log_path, f"  Skipping malformed request at index {j}")
+                        continue
+                    r_key, r_val = next(iter(req_item.items()))
+                    method = (r_val.get("Method") or "").upper()
+                    url_path = r_val.get("URLPath") or ""
+                    headers = r_val.get("Headers")
+                    body = r_val.get("Body")
+                    query = r_val.get("Query")
+                    # Per-request FlowControl overrides
+                    r_flow = r_val.get("FlowControl") or {}
+                    timeout_s = r_flow.get("TimeoutSeconds", default_timeout)
+                    delay_seconds = r_flow.get("DelaySeconds", default_delay)
+
+                    # Resolve deferred for sections
+                    headers_res = resolve_deferred(headers) if headers is not None else None
+                    body_res = resolve_deferred(body) if body is not None else None
+                    query_res = resolve_deferred(query) if query is not None else None
+
+                    # Update in-memory resolved dict with URLRoot and resolved sections
+                    # Find and replace in resolved structure
+                    try:
+                        resolved["StashConfig"]["Sequences"][i-1]["Requests"][j-1][r_key]["URLRoot"] = url_root
+                    except Exception:
+                        # Ensure key path exists; if not, ignore silently
+                        pass
+                    if headers_res is not None:
+                        resolved["StashConfig"]["Sequences"][i-1]["Requests"][j-1][r_key]["Headers"] = headers_res
+                    if body_res is not None:
+                        resolved["StashConfig"]["Sequences"][i-1]["Requests"][j-1][r_key]["Body"] = body_res
+                    if query_res is not None:
+                        resolved["StashConfig"]["Sequences"][i-1]["Requests"][j-1][r_key]["Query"] = query_res
+
+                    # Overwrite the resolved file on disk after resolving this request
+                    try:
+                        write_yaml_file(resolved_path, resolved)
+                    except Exception as we:
+                        write_log(log_path, f"  Warning: failed to update resolved file after {r_key}: {we}")
+
+                    # Build URL
+                    base = (url_root or "").rstrip('/')
+                    path = (url_path or "").lstrip('/')
+                    full_url = base + ("/" if path else "") + path
+                    if query_res:
+                        # Flatten query to str mapping; handle lists
+                        qparts = urlparse.urlencode(query_res, doseq=True, safe="/:?")
+                        sep = '&' if ('?' in full_url) else '?'
+                        full_url = f"{full_url}{sep}{qparts}"
+
+                    # Prepare body
+                    data_bytes = None
+                    if body_res is not None:
+                        try:
+                            data_bytes = json.dumps(body_res).encode('utf-8')
+                        except Exception:
+                            # Fallback: attempt to send as str
+                            data_bytes = str(body_res).encode('utf-8')
+
+                    # Prepare headers
+                    headers_out = {}
+                    if isinstance(headers_res, dict):
+                        headers_out.update(headers_res)
+                    if data_bytes is not None and not any(h.lower() == 'content-type' for h in headers_out.keys()):
+                        headers_out['Content-Type'] = 'application/json; charset=utf-8'
+
+                    # Log the prepared request
+                    write_log(log_path, f"  Request {j}/{len(req_items)}: {r_key}")
+                    write_log(log_path, f"  URL: {full_url}")
+
+                    if dry_run:
+                        write_log(log_path, "  DRY-RUN: would make request (skipped)")
+                        log_yaml(log_path, "  Resolved Request:", {r_key: {"Method": method, "URLRoot": url_root, "URLPath": url_path, "Headers": headers_res, "Body": body_res, "Query": query_res, "TimeoutSeconds": timeout_s}}, indent=4)
+                    else:
+                        # Log resolved request before making the call
+                        log_yaml(log_path, "  Resolved Request:", {r_key: {"Method": method, "URLRoot": url_root, "URLPath": url_path, "Headers": headers_res, "Body": body_res, "Query": query_res, "TimeoutSeconds": timeout_s}}, indent=4)
+                        # Make HTTP request with timeout, catch timeout as failure
+                        try:
+                            req_obj = urlrequest.Request(full_url, data=data_bytes, headers=headers_out, method=method)
+                            timeout_arg = None
+                            if isinstance(timeout_s, int) and timeout_s > 0:
+                                timeout_arg = float(timeout_s)
+                            # Use socket timeout handling
+                            with urlrequest.urlopen(req_obj, timeout=timeout_arg) as resp:
+                                status = getattr(resp, 'status', None) or resp.getcode()
+                                resp_headers = dict(resp.headers.items()) if hasattr(resp, 'headers') else {}
+                                try:
+                                    resp_body = resp.read()
+                                except Exception:
+                                    resp_body = b""
+                                # Attempt to decode as text
+                                try:
+                                    resp_text = resp_body.decode('utf-8', errors='replace')
+                                except Exception:
+                                    resp_text = str(resp_body)
+                                write_log(log_path, f"  Response: HTTP {status}")
+                                log_yaml(log_path, "  Response Headers:", resp_headers)
+                                # Avoid logging huge bodies verbatim; clip
+                                preview = resp_text[:2000]
+                                write_log(log_path, "  Response Body (first 2000 chars):")
+                                write_log(log_path, preview)
+                        except socket.timeout as te:
+                            write_log(log_path, f"  ERROR: Request timed out after {timeout_s}s: {te}")
+                        except Exception as he:
+                            write_log(log_path, f"  ERROR: Request failed: {he}")
+
+                    # Respect FlowControl delay between requests
+                    try:
+                        if delay_seconds and delay_seconds > 0:
+                            time.sleep(delay_seconds)
+                    except Exception:
+                        pass
+
+                # Delay when advancing to next sequence as well
+                try:
+                    if delay_seconds and delay_seconds > 0:
+                        time.sleep(delay_seconds)
+                except Exception:
+                    pass
+
+            write_log(log_path, "=== PayloadStash run finished ===")
         else:
             click.echo("\nOperation Cancelled")
     except Exception:
-        # In non-interactive contexts, treat as cancelled
         click.echo("\nOperation Cancelled")
 
     sys.exit(0)
