@@ -120,12 +120,18 @@ class Sequence(BaseModel):
         return self
 
 
+class FlowControlCfg(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    DelaySeconds: Optional[int] = Field(None, ge=0)
+
+
 class StashConfig(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
     Name: str
     Defaults: Optional[SectionMaps] = None
     Forced: Optional[SectionMaps] = None
+    FlowControl: Optional[FlowControlCfg] = None
     RetryCfg: Optional[Retry] = Field(None, alias='Retry')
     Sequences: List[Sequence]
 
@@ -310,6 +316,17 @@ def _resolve_values(value: Any, dyn: Optional[Dynamics]) -> Any:
     return value
 
 
+# Ensure forward references are resolved for models that refer to each other
+try:
+    # In Pydantic v2, model_rebuild resolves forward refs
+    ns = globals()
+    StashConfig.model_rebuild(force=True, _types_namespace=ns)
+    TopLevelConfig.model_rebuild(force=True, _types_namespace=ns)
+except Exception:
+    # Safe to ignore if rebuild not necessary
+    pass
+
+
 def build_resolved_config_dict(cfg: TopLevelConfig) -> Dict[str, Any]:
     """Build a fully-resolved config dict with Defaults and Forced applied into each Request.
 
@@ -381,6 +398,14 @@ def build_resolved_config_dict(cfg: TopLevelConfig) -> Dict[str, Any]:
                 f["Retry"] = forced.RetryCfg.model_dump(by_alias=True, exclude_none=True)
         if f:
             out["StashConfig"]["Forced"] = f
+
+    # FlowControl if provided
+    if hasattr(sc, 'FlowControl') and sc.FlowControl is not None:
+        fc: Dict[str, Any] = {}
+        if sc.FlowControl.DelaySeconds is not None:
+            fc["DelaySeconds"] = sc.FlowControl.DelaySeconds
+        if fc:
+            out["StashConfig"]["FlowControl"] = fc
 
     # Sequences with resolved requests
     seq_list: List[Dict[str, Any]] = []

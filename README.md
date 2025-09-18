@@ -191,7 +191,11 @@ StashConfig:
     Headers?: { <k>: <v>, ... }
     Body?:    { <k>: <v>, ... }
     Query?:   { <k>: <v>, ... }
-    
+  
+  FlowControl:
+    # Optional: number of seconds in between sequences and requests (default: 1)
+    DelaySeconds?: <int> 
+  
   # Optional global retry policy (applies when a request omits Retry)
   Retry?:
     Attempts: <int>                 # total tries including the first (e.g., 3)
@@ -417,6 +421,42 @@ If the same key appears in multiple merged maps, the last one wins. After anchor
     * **Sequential**: requests execute one-at-a-time.
     * **Concurrent**: requests execute in parallel (async/await). `ConcurrencyLimit` caps fan-out.
 * A failed request does not stop the run. Its response, HTTP status, and timing are written; execution continues.
+
+## Flow Control (optional)
+
+The FlowControl block lets you introduce small deliberate delays to pace your run.
+
+- DelaySeconds: Optional non-negative integer. Default is 1.
+- Applies between consecutive requests inside a sequence and when advancing from one sequence to the next.
+
+Example:
+
+```yml
+StashConfig:
+  Name: WithDelay
+  FlowControl:
+    DelaySeconds: 2  # wait ~2s between requests and between sequences
+  Sequences:
+    - Name: A
+      Type: Sequential
+      Requests:
+        - First:
+            Method: GET
+            URLPath: /a
+        - Second:
+            Method: GET
+            URLPath: /b
+    - Name: B
+      Type: Concurrent
+      ConcurrencyLimit: 3
+      Requests:
+        - One:
+            Method: GET
+            URLPath: /x
+        - Two:
+            Method: GET
+            URLPath: /y
+```
 
 ---
 
