@@ -130,12 +130,24 @@ class StashConfig(BaseModel):
     Sequences: List[Sequence]
 
 
+class DynamicPattern(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    template: str
+
+
+class Dynamics(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    patterns: Dict[str, DynamicPattern]
+    sets: Optional[Dict[str, List[str]]] = None
+
+
 class TopLevelConfig(BaseModel):
     """Top-level model. Allows extra keys (anchors/aliases) but requires StashConfig."""
 
     model_config = ConfigDict(extra='allow')
 
     StashConfig: StashConfig
+    dynamics: Optional[Dynamics] = Field(None, alias='dynamics')
 
 
 def validate_config_data(data: Dict[str, Any]) -> TopLevelConfig:
@@ -145,6 +157,11 @@ def validate_config_data(data: Dict[str, Any]) -> TopLevelConfig:
     Additionally, provides a friendlier message if the top-level `StashConfig`
     section is missing but common StashConfig children are present at the root.
     """
+    # Normalize alternate capitalization for dynamics
+    if isinstance(data, dict) and 'dynamics' not in data and 'Dynamics' in data:
+        data = dict(data)
+        data['dynamics'] = data.get('Dynamics')
+
     if isinstance(data, dict) and 'StashConfig' not in data:
         likely_children = {'Defaults', 'Forced', 'Retry', 'Sequences', 'Name'}
         present = likely_children.intersection(data.keys())
@@ -243,8 +260,34 @@ def _resolve_func_obj(obj: Dict[str, Any]) -> Any:
     raise ValueError(f"Unknown function in config: {func_name}")
 
 
-def _resolve_values(value: Any) -> Any:
-    """Recursively resolve any function-call objects inside dicts/lists/primitives.
+def _resolve_dynamic_obj(obj: Dict[str, Any], dyn: Optional[Dynamics]) -> Any:
+    """
+    Evaluate a $dynamic object using the provided dynamics context.
+    Forms:
+      - {"$dynamic": "patternName"}
+      - {"$dynamic": "patternName", "when": "resolve|request"}
+    """
+    if "$dynamic" not in obj:
+        return obj
+    if dyn is None:
+        raise ValueError("$dynamic used but no top-level 'dynamics' section was provided")
+    pattern_name = obj.get("$dynamic")
+    when = obj.get("when", "resolve")
+    if not isinstance(pattern_name, str):
+        raise ValueError("$dynamic must be a string naming a pattern")
+    pat = dyn.patterns.get(pattern_name)
+    if pat is None:
+        raise ValueError(f"Unknown dynamic pattern: {pattern_name}")
+    template = pat.template
+    sets = dyn.sets or {}
+    if when == "request":
+        return {"$deferred": {"dynamic": {"template": template, "sets": sets}}}
+    # resolve now
+    return cfgutil.dynamic_expand(template, sets)
+
+
+def _resolve_values(value: Any, dyn: Optional[Dynamics]) -> Any:
+    """Recursively resolve any function-call or $dynamic objects inside dicts/lists/primitives.
 
     Notes:
     - Objects with "$deferred" are preserved for request-time resolution.
@@ -253,13 +296,16 @@ def _resolve_values(value: Any) -> Any:
         # Don't touch already-deferred nodes
         if "$deferred" in value:
             return value
-        # First check if this dict itself is a function-call object
+        # Check if this dict itself is a function-call object
         if "$func" in value or "$timestamp" in value:
             return _resolve_func_obj(value)
+        # Check if it's a dynamic object
+        if "$dynamic" in value:
+            return _resolve_dynamic_obj(value, dyn)
         # Else resolve each entry
-        return {k: _resolve_values(v) for k, v in value.items()}
+        return {k: _resolve_values(v, dyn) for k, v in value.items()}
     if isinstance(value, list):
-        return [_resolve_values(v) for v in value]
+        return [_resolve_values(v, dyn) for v in value]
     # primitives unchanged
     return value
 
@@ -276,6 +322,8 @@ def build_resolved_config_dict(cfg: TopLevelConfig) -> Dict[str, Any]:
     sc = cfg.StashConfig
     defaults = sc.Defaults
     forced = sc.Forced
+
+    dyn = getattr(cfg, 'dynamics', None)
 
     # Helper to detect if a Pydantic field was provided (even if its value is None)
     def _provided(m: Any, field_name: str) -> bool:
@@ -302,11 +350,11 @@ def build_resolved_config_dict(cfg: TopLevelConfig) -> Dict[str, Any]:
         if defaults.URLRoot is not None:
             d["URLRoot"] = defaults.URLRoot
         if defaults.Headers is not None:
-            d["Headers"] = _resolve_values(_copy_map(defaults.Headers))
+            d["Headers"] = _resolve_values(_copy_map(defaults.Headers), dyn)
         if defaults.Body is not None:
-            d["Body"] = _resolve_values(_copy_map(defaults.Body))
+            d["Body"] = _resolve_values(_copy_map(defaults.Body), dyn)
         if defaults.Query is not None:
-            d["Query"] = _resolve_values(_copy_map(defaults.Query))
+            d["Query"] = _resolve_values(_copy_map(defaults.Query), dyn)
         if _provided(defaults, 'RetryCfg'):
             if defaults.RetryCfg is None:
                 d["Retry"] = None
@@ -320,11 +368,11 @@ def build_resolved_config_dict(cfg: TopLevelConfig) -> Dict[str, Any]:
         if forced.URLRoot is not None:
             f["URLRoot"] = forced.URLRoot
         if forced.Headers is not None:
-            f["Headers"] = _resolve_values(_copy_map(forced.Headers))
+            f["Headers"] = _resolve_values(_copy_map(forced.Headers), dyn)
         if forced.Body is not None:
-            f["Body"] = _resolve_values(_copy_map(forced.Body))
+            f["Body"] = _resolve_values(_copy_map(forced.Body), dyn)
         if forced.Query is not None:
-            f["Query"] = _resolve_values(_copy_map(forced.Query))
+            f["Query"] = _resolve_values(_copy_map(forced.Query), dyn)
         if _provided(forced, 'RetryCfg'):
             # Generally Forced.Retry is not expected; but if provided, include for transparency (including explicit null)
             if forced.RetryCfg is None:
@@ -364,10 +412,10 @@ def build_resolved_config_dict(cfg: TopLevelConfig) -> Dict[str, Any]:
                 query = query or {}
                 query.update(forced.Query)
 
-            # resolve any function-call objects after merges
-            headers = _resolve_values(headers) if headers is not None else None
-            body = _resolve_values(body) if body is not None else None
-            query = _resolve_values(query) if query is not None else None
+            # resolve any function-call or dynamic objects after merges
+            headers = _resolve_values(headers, dyn) if headers is not None else None
+            body = _resolve_values(body, dyn) if body is not None else None
+            query = _resolve_values(query, dyn) if query is not None else None
 
             # resolve retry precedence with explicit-null awareness
             retry_set = False

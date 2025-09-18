@@ -168,13 +168,12 @@ Dynamics:
     userid_hex_prefixed:
       template: "1234${hex:20}"
     userid_hex_structured:
-      template: "1234${hex:22}${choice:teams:1}${hex:4}${hex:2}00"
+      template: "1234${hex:22}${choice:teams}${hex:4}${hex:2}00"
     userid_uuid_v4:
       template: "${uuidv4}"
 
   sets:
     teams: ["0","1","2","3"]
-
 
 StashConfig:
   Name: <string>
@@ -232,20 +231,19 @@ StashConfig:
               RetryOnTimeouts?: <bool>
 ```
 
-### Config utilities (function calls inside configs)
+### Functions & Dynamics inside configs
 
-You can compute certain values using a special object syntax. The following helper is available:
+You can compute certain values using a special object syntax. The following helpers are available:
 
+Functions:
 - timestamp: returns the current UTC time in one of several formats.
 
 Usage forms:
 - { $func: timestamp, format: iso_8601 }
-- { $timestamp: epoch_ms }
 - With control over when it is evaluated:
   - { $func: timestamp, format: iso_8601, when: request }
-  - { $timestamp: { format: epoch_ms, when: request } }
 
-Supported formats: epoch_ms, epoch_s, iso_8601.
+Supported formats for timestamp: epoch_ms, epoch_s, iso_8601.
 
 When parameter:
 - when: resolve (default) – evaluate during config resolution (e.g., when writing *-resolved.yml).
@@ -272,7 +270,7 @@ StashConfig:
   Defaults:
     Body:
       ts_resolve: { $func: timestamp, format: iso_8601 }
-      ts_request: { $timestamp: { format: epoch_ms, when: request } }
+      ts_request: { $func: timestamp, format: epoch_ms, when: request }
   Sequences:
     - Name: OnlySeq
       Type: Sequential
@@ -284,6 +282,92 @@ StashConfig:
               now_req: { $func: timestamp, format: iso_8601, when: request }
 ```
 
+Dynamics:
+- Dynamics let you declare reusable ID or token patterns once and then materialize them anywhere in Headers, Query, or 
+Body using a special object form: { $dynamic: <patternName>, ... }.
+- Unlike functions (which call code), dynamics expand a named template you define under the top-level dynamics: section 
+of your YAML.
+
+Where you declare them:
+- Top-level section (sibling of StashConfig):
+
+  ```yml
+  dynamics:
+    patterns:
+      user_structured:
+        template: "1234${hex:22}${choice:teams}00"
+      user_uuid:
+        template: "user-${uuidv4}"
+    sets:
+      teams: ["00", "01", "02", "03"]
+  ```
+- patterns: A map of pattern names to a template string.
+- sets: Named lists used by ${choice:<setName>} placeholders inside templates.
+
+Template placeholders supported:
+- ${hex:N} — N random hexadecimal characters, uppercase A–F guaranteed.
+- ${uuidv4} — A standard UUID v4 string, e.g., 3f2b0b9a-3c03-4b0a-b4ad-5d9d3f6e45a7.
+- ${choice:setName} — Pick one random element from a named set, e.g., teams above returns one of ["00", "01", "02", "03"].
+
+Using a dynamic in a request:
+- Resolve-time (default): materialize immediately during config resolution.
+
+  ```yml
+  Body:
+    userId: { $dynamic: user_structured }
+  ```
+  
+- Request-time deferral: keep as a marker until the HTTP call is about to be sent, so every request gets a fresh value.
+
+  ```yml
+  Body:
+    userId: { $dynamic: user_structured, when: request }
+  ```
+
+When parameter for dynamics:
+- when: resolve (default) — expand the template while creating the *-resolved.yml file. The resulting literal string 
+  appears in that file.
+- when: request — store a deferred marker in the resolved file; the CLI will expand it right before sending the request 
+  so each attempt (or each request in a loop) can get a unique value.
+
+Notes and behavior:
+- Scope: dynamics is top-level and applies to the entire file. Pattern names must be unique. You can keep multiple 
+  pattern families in one file by namespacing, e.g., player_uuid_v4.
+- Determinism: expansions are random by design (hex/choice). Use resolve-time if you want to audit exact values in 
+  *-resolved.yml; use request-time to get per-request variety.
+- Coexistence with Functions: you can freely mix $func and $dynamic in the same object. Both support when with the same 
+  semantics.
+- Resolved output: request-time dynamics are preserved in *-resolved.yml as a generic $deferred marker and expanded by 
+  the runner at send-time (similar to $func deferral).
+
+End-to-end example:
+
+  ```yml
+  dynamics:
+    patterns:
+      player_id:
+        template: "p-${hex:8}-${choice:teams}-${hex:4}"
+    sets:
+      teams: ["NORTH", "SOUTH", "EAST", "WEST"]
+
+  StashConfig:
+    Name: WithDynamics
+    Defaults:
+      Body:
+        # resolve-time value: appears literal in *-resolved.yml
+        example_id_resolve: { $dynamic: player_id }
+        # request-time: shows as deferred in *-resolved.yml and is generated at send-time
+        example_id_request: { $dynamic: player_id, when: request }
+    Sequences:
+      - Name: OnlySeq
+        Type: Sequential
+        Requests:
+          - Ping:
+              Method: GET
+              URLPath: /health
+              Body:
+                per_call_id: { $dynamic: player_id, when: request }
+  ```
 ---
 
 ## Merge & Precedence Rules

@@ -6,11 +6,13 @@ common_headers: &common_headers
 # Define reusable common body parameters
 common_body: &common_body
   someProperty: someValue
+  userid_resolve: { $dynamic: user_structured }
+  userid_request: { $dynamic: user_structured, when: request}
 
 dynamics:
   patterns:
     user_structured:
-      template: "1234${hex:22}${choice:teams:2}00"
+      template: "1234${hex:22}${choice:teams}00"
   sets:
     teams: ["00","01","02","03"]
 
