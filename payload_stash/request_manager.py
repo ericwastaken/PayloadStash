@@ -13,7 +13,7 @@ returning (status_code, headers_dict, response_text).
 """
 from __future__ import annotations
 
-from typing import Dict, Tuple, Optional, Any, Iterable
+from typing import Dict, Tuple, Optional, Any, Iterable, Callable
 import time
 import random
 
@@ -112,15 +112,17 @@ class RequestManager:
         body: Optional[bytes] = None,
         timeout_s: Optional[float] = None,
         retry_cfg: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[int, Dict[str, str], str]:
+        log_cb: Optional[Callable[[str], None]] = None,
+    ) -> Tuple[int, Dict[str, str], str, int]:
         """
         Perform an HTTP request with schema-driven retries and backoff.
 
-        Returns a tuple: (status_code, headers_dict, response_text)
+        Returns a tuple: (status_code, headers_dict, response_text, attempts_made)
         """
         # Fast path: no retry configured
         if not retry_cfg:
-            return self._single_attempt(method, url, headers, body, timeout_s)
+            s, h, t = self._single_attempt(method, url, headers, body, timeout_s)
+            return s, h, t, 1
 
         # Map config -> policy with defaults
         attempts: int = int(retry_cfg.get("Attempts", 1))
@@ -159,42 +161,65 @@ class RequestManager:
                 is_network = isinstance(e, _NETWORK_EXCS)
                 if (is_timeout and ron_timeouts) or (is_network and ron_errors):
                     # retryable
-                    pass
+                    if log_cb:
+                        et = type(e).__name__
+                        log_cb(f"Retry: attempt {attempt}/{attempts} raised {et}: {e}. Marked retryable.")
                 else:
                     # not retryable -> raise immediately
+                    if log_cb:
+                        et = type(e).__name__
+                        log_cb(f"Retry: attempt {attempt}/{attempts} raised {et}: {e}. Not retryable; abort.")
                     raise
 
             # Decide whether to break or retry based on result
             should_retry = False
+            reason = None
             if last_exc is None:
                 if status in retry_on_status:
                     should_retry = True
+                    reason = f"HTTP {status} in RetryOnStatus"
 
             # If no retry needed or out of attempts, break/raise
             if (not should_retry and last_exc is None) or attempt >= attempts:
                 if last_exc is not None and (attempt >= attempts):
                     # exhausted
+                    if log_cb:
+                        log_cb(f"Retry: attempts exhausted after {attempts} attempts; raising last error.")
                     raise last_exc
-                return status, resp_headers, resp_text
+                # success path without retry
+                return status, resp_headers, resp_text, attempt
 
             # Compute delay for the next retry
             next_retry_index = attempt  # 1 for first retry after attempt 1
             delay = self._compute_delay(next_retry_index, strategy, base, mult, max_backoff, jitter)
+            if log_cb:
+                why = reason if reason else (f"exception: {type(last_exc).__name__}: {last_exc}" if last_exc is not None else "unknown")
+                log_cb(
+                    f"Retry: scheduling retry {next_retry_index}/{attempts - 1} due to {why}; backoff={strategy} base={base} mult={mult} max={max_backoff} jitter={bool(jitter)} -> delay {delay:.3f} s"
+                )
 
             # Enforce max elapsed budget (if configured)
             if max_elapsed is not None:
                 elapsed = time.monotonic() - start
                 # If waiting would exceed budget, stop now
                 if elapsed + delay > max_elapsed:
+                    if log_cb:
+                        remaining = max_elapsed - elapsed
+                        log_cb(f"Retry: max elapsed budget {max_elapsed:.3f}s would be exceeded (remaining {remaining:.3f}s, needed {delay:.3f}s). Aborting retries.")
                     if last_exc is not None:
                         raise last_exc
                     # Return the current (possibly error) response without waiting further
-                    return status, resp_headers, resp_text
+                    return status, resp_headers, resp_text, attempt
 
             if delay > 0:
+                if log_cb:
+                    log_cb(f"Retry: sleeping {delay:.3f} s before next attempt")
                 time.sleep(delay)
+            else:
+                if log_cb:
+                    log_cb("Retry: no delay before next attempt")
 
         # Fallback (should not reach)
         if last_exc is not None:
             raise last_exc
-        return status, resp_headers, resp_text
+        return status, resp_headers, resp_text, attempts

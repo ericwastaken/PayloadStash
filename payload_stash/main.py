@@ -275,15 +275,17 @@ def run(config: Path, out_dir: Path, max_workers: int | None, dry_run: bool, yes
                             log_yaml(log_path, "    Resolved Retry:", effective_retry, indent=6)
                         # Make HTTP request with timeout, catch failure
                         try:
-                            status, resp_headers, resp_text = rm.request(
+                            status, resp_headers, resp_text, attempts_made = rm.request(
                                 method=method,
                                 url=full_url,
                                 headers=headers_out,
                                 body=data_bytes,
                                 timeout_s=timeout_s,
                                 retry_cfg=effective_retry,
+                                log_cb=lambda m: write_log(log_path, "    " + m)
                             )
                             write_log(log_path, f"    Response: HTTP {status}")
+                            write_log(log_path, f"    Attempts: {attempts_made}")
                             log_yaml(log_path, "    Response Headers:", resp_headers, indent=6)
                             # Write response body to a file instead of logging it
                             try:
