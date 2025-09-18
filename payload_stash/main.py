@@ -176,6 +176,14 @@ def run(config: Path, out_dir: Path, max_workers: int | None, dry_run: bool, yes
                 click.echo(msg)
                 write_log(log_path, msg)
 
+                # Create per-sequence output directory (seqNNN-Name)
+                seq_dir_name = f"seq{i:03d}-{s_name}"
+                seq_out_dir = run_root / seq_dir_name
+                try:
+                    seq_out_dir.mkdir(parents=True, exist_ok=True)
+                except Exception as e:
+                    write_log(log_path, f"  Warning: failed to create sequence directory '{seq_out_dir}': {e}")
+
                 # Prepare all requests for this sequence (resolve and persist to resolved file)
                 req_items = seq_d.get("Requests", [])
                 prepared_requests: list[tuple[int, str, dict, dict, str, dict, bytes | None, float | None, dict | None]] = []
@@ -267,6 +275,10 @@ def run(config: Path, out_dir: Path, max_workers: int | None, dry_run: bool, yes
                                             timeout_s: float | None, effective_retry: dict | None,
                                             resolved_request_block: dict) -> tuple[int, list[str]]:
                     lines: list[str] = []
+                    try:
+                        click.echo(f"Running request {idx}/{total_in_seq}: {r_key}")
+                    except Exception:
+                        pass
                     lines.append(f"  Request {idx}/{total_in_seq}: {r_key}")
                     lines.append(f"    URL: {full_url}")
                     # Log Resolved Request
@@ -324,8 +336,8 @@ def run(config: Path, out_dir: Path, max_workers: int | None, dry_run: bool, yes
                                             ext = subtype.lower()
                                 except Exception:
                                     pass
-                            resp_out_name = f"seq{i:02d}-req{idx:02d}-{r_key}-response.{ext}"
-                            resp_out_path = run_root / resp_out_name
+                            resp_out_name = f"req{idx:03d}-{r_key}-response.{ext}"
+                            resp_out_path = seq_out_dir / resp_out_name
                             with resp_out_path.open('w', encoding='utf-8') as rf:
                                 rf.write(resp_text)
                             lines.append(f"    Response Body: written to {resp_out_path}")
@@ -372,7 +384,7 @@ def run(config: Path, out_dir: Path, max_workers: int | None, dry_run: bool, yes
                     write_log(log_path, f"  Using concurrency: workers={workers}")
                     outcomes: dict[int, list[str]] = {}
                     next_to_flush = 1
-                    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix=f"seq{i:02d}") as ex:
+                    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix=f"seq{i:03d}") as ex:
                         futs = []
                         for (idx, r_key, resolved_request_block, headers_out, full_url, r_val, data_bytes, timeout_s, effective_retry) in prepared_requests:
                             method = (r_val.get("Method") or "").upper()

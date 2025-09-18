@@ -45,8 +45,8 @@ PayloadStash writes responses to a deterministic path with a **timestamped run f
 <out>/
   <StashConfig.Name>/
     <RunTimestamp>/
-      <Sequence.Name>/
-        <RequestKey>.<ext>
+      seqNNN-<Sequence.Name>/
+        reqNNN-<RequestKey>-response.<ext>
       <original-config>-results.csv
       <original-config>-resolved.yml
       <original-config>-log.txt
@@ -58,12 +58,12 @@ PayloadStash writes responses to a deterministic path with a **timestamped run f
 out/
   PXXX-Tester-01/
     2025-09-17T15-42-10Z/
-      GetGeneralData/
-        GetConfig.json
-        GetCatalog.json
-      GetPlayer01/
-        GetState.json
-        GrantItem.json
+      seq001-GetGeneralData/
+        req001-GetConfig-response.json
+        req002-GetCatalog-response.json
+      seq002-GetPlayer01/
+        req001-GetState-response.json
+        req002-GrantItem-response.json
       PXXX-Tester-01-results.csv
       PXXX-Tester-01-resolved.yml
       PXXX-Tester-01-log.txt
@@ -541,8 +541,7 @@ Sequences:
 
 ## Output Files & Extensions
 
-Each request writes one file named after the **RequestKey** with an extension derived from the **Content‑Type** of the 
-response.
+Each request writes one file per request, named as `reqNNN-<RequestKey>-response.<ext>`, where NNN is the 1-based index within its sequence. The extension is derived from the response Content‑Type.
 
 | Content-Type                | Extension |
 | --------------------------- | --------- |
@@ -557,7 +556,7 @@ response.
 **Path construction**
 
 ```
-<out>/<StashConfig.Name>/<RunTimestamp>/<Sequence.Name>/<RequestKey>.<ext>
+<out>/<StashConfig.Name>/<RunTimestamp>/seqNNN-<Sequence.Name>/reqNNN-<RequestKey>-response.<ext>
 ```
 
 ---
