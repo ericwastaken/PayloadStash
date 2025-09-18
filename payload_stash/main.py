@@ -141,7 +141,14 @@ def run(config: Path, out_dir: Path, max_workers: int | None, dry_run: bool, yes
             import time
             from urllib import parse as urlparse
             import json
-            rm = RequestManager()
+            # Size the connection pool to accommodate concurrency when used
+            pool_size = 50
+            try:
+                if max_workers is not None and int(max_workers) > 0:
+                    pool_size = max(50, int(max_workers))
+            except Exception:
+                pass
+            rm = RequestManager(pool_maxsize=pool_size)
 
             start_run_log(log_path, ts, sc_name, resolved_path, max_workers)
 
@@ -169,14 +176,16 @@ def run(config: Path, out_dir: Path, max_workers: int | None, dry_run: bool, yes
                 click.echo(msg)
                 write_log(log_path, msg)
 
-                # Only Sequential supported for now (issue says do not implement Retry yet and no concurrency requirement here)
+                # Prepare all requests for this sequence (resolve and persist to resolved file)
                 req_items = seq_d.get("Requests", [])
+                prepared_requests: list[tuple[int, str, dict, dict, str, dict, bytes | None, float | None, dict | None]] = []
+                # Each tuple: (index, r_key, resolved_request_block, headers_out, full_url, r_val, data_bytes, timeout_s, effective_retry)
                 for j, req_item in enumerate(req_items, start=1):
-                    # req_item is like { Key: {Method, URLPath, Headers, Body, Query, FlowControl?, Retry?} }
                     if not isinstance(req_item, dict) or len(req_item) != 1:
                         write_log(log_path, f"  Skipping malformed request at index {j}")
                         continue
                     r_key, r_val = next(iter(req_item.items()))
+
                     method = (r_val.get("Method") or "").upper()
                     url_path = r_val.get("URLPath") or ""
                     headers = r_val.get("Headers")
@@ -193,11 +202,9 @@ def run(config: Path, out_dir: Path, max_workers: int | None, dry_run: bool, yes
                     query_res = resolve_deferred(query) if query is not None else None
 
                     # Update in-memory resolved dict with URLRoot and resolved sections
-                    # Find and replace in resolved structure
                     try:
                         resolved["StashConfig"]["Sequences"][i-1]["Requests"][j-1][r_key]["URLRoot"] = url_root
                     except Exception:
-                        # Ensure key path exists; if not, ignore silently
                         pass
                     if headers_res is not None:
                         resolved["StashConfig"]["Sequences"][i-1]["Requests"][j-1][r_key]["Headers"] = headers_res
@@ -217,7 +224,6 @@ def run(config: Path, out_dir: Path, max_workers: int | None, dry_run: bool, yes
                     path = (url_path or "").lstrip('/')
                     full_url = base + ("/" if path else "") + path
                     if query_res:
-                        # Flatten query to str mapping; handle lists
                         qparts = urlparse.urlencode(query_res, doseq=True, safe="/:?")
                         sep = '&' if ('?' in full_url) else '?'
                         full_url = f"{full_url}{sep}{qparts}"
@@ -228,7 +234,6 @@ def run(config: Path, out_dir: Path, max_workers: int | None, dry_run: bool, yes
                         try:
                             data_bytes = json.dumps(body_res).encode('utf-8')
                         except Exception:
-                            # Fallback: attempt to send as str
                             data_bytes = str(body_res).encode('utf-8')
 
                     # Prepare headers
@@ -238,112 +243,164 @@ def run(config: Path, out_dir: Path, max_workers: int | None, dry_run: bool, yes
                     if data_bytes is not None and not any(h.lower() == 'content-type' for h in headers_out.keys()):
                         headers_out['Content-Type'] = 'application/json; charset=utf-8'
 
-                    # Log the prepared request
-                    click.echo(f"  Request {j}/{len(req_items)}: {r_key}")
-                    write_log(log_path, f"  Request {j}/{len(req_items)}: {r_key}")
-                    write_log(log_path, f"    URL: {full_url}")
-
-                    # Determine effective Retry configuration (per-request overrides Defaults; explicit null disables)
-                    # The resolved config already computed effective Retry precedence.
+                    # Effective Retry (already precedence-resolved in resolved config building)
                     effective_retry = r_val.get("Retry") if isinstance(r_val, dict) else None
 
-                    if dry_run:
-                        write_log(log_path, "    DRY-RUN: would make request (skipped)")
-                        # Resolved Request block without repeating the request key
-                        log_yaml(
-                            log_path,
-                            "    Resolved Request:",
-                            {"Method": method, "URLRoot": url_root, "URLPath": url_path, "Headers": headers_res, "Body": body_res, "Query": query_res, "TimeoutSeconds": timeout_s},
-                            indent=6,
-                        )
-                        # Resolved Retry: inline Null when absent, otherwise a block without the request key
-                        if effective_retry is None:
-                            write_log(log_path, "    Resolved Retry: Null")
-                        else:
-                            log_yaml(log_path, "    Resolved Retry:", effective_retry, indent=6)
+                    resolved_request_block = {
+                        "Method": method,
+                        "URLRoot": url_root,
+                        "URLPath": url_path,
+                        "Headers": headers_res,
+                        "Body": body_res,
+                        "Query": query_res,
+                        "TimeoutSeconds": timeout_s,
+                    }
+
+                    prepared_requests.append((j, r_key, resolved_request_block, headers_out, full_url, r_val, data_bytes, timeout_s, effective_retry))
+
+                # Helper to format and execute a single request, returning grouped log lines
+                from .utility import yaml_to_string
+                import json as _json
+
+                def _process_single_request(idx: int, total_in_seq: int, r_key: str,
+                                            method: str, full_url: str, headers_out: dict, data_bytes: bytes | None,
+                                            timeout_s: float | None, effective_retry: dict | None,
+                                            resolved_request_block: dict) -> tuple[int, list[str]]:
+                    lines: list[str] = []
+                    lines.append(f"  Request {idx}/{total_in_seq}: {r_key}")
+                    lines.append(f"    URL: {full_url}")
+                    # Log Resolved Request
+                    y_req = yaml_to_string(resolved_request_block).splitlines()
+                    lines.append("    Resolved Request:")
+                    lines.extend(["      " + ln for ln in y_req])
+                    # Resolved Retry
+                    if effective_retry is None:
+                        lines.append("    Resolved Retry: Null")
                     else:
-                        # Log resolved request and retry before making the call
-                        log_yaml(
-                            log_path,
-                            "    Resolved Request:",
-                            {"Method": method, "URLRoot": url_root, "URLPath": url_path, "Headers": headers_res, "Body": body_res, "Query": query_res, "TimeoutSeconds": timeout_s},
-                            indent=6,
-                        )
-                        if effective_retry is None:
-                            write_log(log_path, "    Resolved Retry: Null")
-                        else:
-                            log_yaml(log_path, "    Resolved Retry:", effective_retry, indent=6)
-                        # Make HTTP request with timeout, catch failure
-                        try:
-                            status, resp_headers, resp_text, attempts_made, req_log = rm.request(
-                                method=method,
-                                url=full_url,
-                                headers=headers_out,
-                                body=data_bytes,
-                                timeout_s=timeout_s,
-                                retry_cfg=effective_retry,
-                            )
-                            # Write internal request log from RequestManager
-                            if req_log:
-                                for line in req_log.splitlines():
-                                    write_log(log_path, "    " + line)
-                            write_log(log_path, f"    Response: HTTP {status}")
-                            write_log(log_path, f"    Attempts: {attempts_made}")
-                            log_yaml(log_path, "    Response Headers:", resp_headers, indent=6)
-                            # Write response body to a file instead of logging it
-                            try:
-                                # Decide file extension based on Content-Type header (use subtype, e.g., application/json -> json)
-                                ct_value = None
-                                for hk, hv in (resp_headers or {}).items():
-                                    try:
-                                        if str(hk).lower() == 'content-type':
-                                            ct_value = str(hv)
-                                            break
-                                    except Exception:
-                                        continue
-                                ext = 'txt'
-                                if isinstance(ct_value, str) and ct_value:
-                                    try:
-                                        ct_main = ct_value.split(';', 1)[0].strip()
-                                        if '/' in ct_main:
-                                            subtype = ct_main.split('/', 1)[1].strip()
-                                            if subtype:
-                                                ext = subtype.lower()
-                                    except Exception:
-                                        pass
-                                resp_out_name = f"seq{i:02d}-req{j:02d}-{r_key}-response.{ext}"
-                                resp_out_path = run_root / resp_out_name
-                                with resp_out_path.open('w', encoding='utf-8') as rf:
-                                    rf.write(resp_text)
-                                write_log(log_path, f"    Response Body: written to {resp_out_path}")
-                            except Exception as we:
-                                write_log(log_path, f"    Warning: failed to write response body file: {we}")
-                        except Exception as he:
-                            # Write any internal request logs captured by RequestManager on error
-                            try:
-                                req_log = getattr(he, "request_log", None)
-                            except Exception:
-                                req_log = None
-                            if req_log:
-                                for line in str(req_log).splitlines():
-                                    write_log(log_path, "    " + line)
-                            # Generic failure (including timeouts) are logged here
-                            write_log(log_path, f"    ERROR: Request failed: {he}")
+                        y_ret = yaml_to_string(effective_retry).splitlines()
+                        lines.append("    Resolved Retry:")
+                        lines.extend(["      " + ln for ln in y_ret])
 
-                    # Respect FlowControl delay between requests
+                    if dry_run:
+                        lines.append("    DRY-RUN: would make request (skipped)")
+                        return idx, lines
+
+                    # Execute request
                     try:
-                        write_log(log_path, f"    Delay {delay_seconds if delay_seconds is not None else 0} s")
-                        if delay_seconds and delay_seconds > 0:
-                            time.sleep(delay_seconds)
-                    except Exception:
-                        pass
+                        status, resp_headers, resp_text, attempts_made, req_log = rm.request(
+                            method=method,
+                            url=full_url,
+                            headers=headers_out,
+                            body=data_bytes,
+                            timeout_s=timeout_s,
+                            retry_cfg=effective_retry,
+                        )
+                        if req_log:
+                            for l in req_log.splitlines():
+                                lines.append("    " + l)
+                        lines.append(f"    Response: HTTP {status}")
+                        lines.append(f"    Attempts: {attempts_made}")
+                        # Response headers
+                        y_hdr = yaml_to_string(resp_headers).splitlines()
+                        lines.append("    Response Headers:")
+                        lines.extend(["      " + ln for ln in y_hdr])
+                        # Write body to file
+                        try:
+                            ct_value = None
+                            for hk, hv in (resp_headers or {}).items():
+                                try:
+                                    if str(hk).lower() == 'content-type':
+                                        ct_value = str(hv)
+                                        break
+                                except Exception:
+                                    continue
+                            ext = 'txt'
+                            if isinstance(ct_value, str) and ct_value:
+                                try:
+                                    ct_main = ct_value.split(';', 1)[0].strip()
+                                    if '/' in ct_main:
+                                        subtype = ct_main.split('/', 1)[1].strip()
+                                        if subtype:
+                                            ext = subtype.lower()
+                                except Exception:
+                                    pass
+                            resp_out_name = f"seq{i:02d}-req{idx:02d}-{r_key}-response.{ext}"
+                            resp_out_path = run_root / resp_out_name
+                            with resp_out_path.open('w', encoding='utf-8') as rf:
+                                rf.write(resp_text)
+                            lines.append(f"    Response Body: written to {resp_out_path}")
+                        except Exception as we:
+                            lines.append(f"    Warning: failed to write response body file: {we}")
+                    except Exception as he:
+                        # Any internal request logs captured by RequestManager on error
+                        try:
+                            req_log = getattr(he, "request_log", None)
+                        except Exception:
+                            req_log = None
+                        if req_log:
+                            for line in str(req_log).splitlines():
+                                lines.append("    " + line)
+                        lines.append(f"    ERROR: Request failed: {he}")
+                    return idx, lines
 
-                # Delay when advancing to next sequence as well
-                try:
-                    if delay_seconds and delay_seconds > 0:
-                        time.sleep(delay_seconds)
-                except Exception:
-                    pass
+                # Execute sequentially or concurrently
+                s_type = (seq_d.get("Type") or "Sequential").strip()
+                total_in_seq = len(prepared_requests)
+                from concurrent.futures import ThreadPoolExecutor, as_completed
+
+                # Determine workers for concurrent type
+                conc_limit = seq_d.get("ConcurrencyLimit")
+                def _effective_workers() -> int:
+                    caps = []
+                    if conc_limit:
+                        try:
+                            caps.append(int(conc_limit))
+                        except Exception:
+                            pass
+                    if max_workers:
+                        try:
+                            caps.append(int(max_workers))
+                        except Exception:
+                            pass
+                    cap = min(caps) if caps else None
+                    if cap is None:
+                        return min(8, max(1, total_in_seq))
+                    return max(1, min(cap, total_in_seq))
+
+                if s_type.lower() == "concurrent":
+                    workers = _effective_workers()
+                    write_log(log_path, f"  Using concurrency: workers={workers}")
+                    outcomes: dict[int, list[str]] = {}
+                    next_to_flush = 1
+                    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix=f"seq{i:02d}") as ex:
+                        futs = []
+                        for (idx, r_key, resolved_request_block, headers_out, full_url, r_val, data_bytes, timeout_s, effective_retry) in prepared_requests:
+                            method = (r_val.get("Method") or "").upper()
+                            fut = ex.submit(_process_single_request, idx, total_in_seq, r_key, method, full_url, headers_out, data_bytes, timeout_s, effective_retry, resolved_request_block)
+                            futs.append(fut)
+                        for fut in as_completed(futs):
+                            idx, lines = fut.result()
+                            outcomes[idx] = lines
+                            while next_to_flush in outcomes:
+                                write_log(log_path, "\n".join(outcomes.pop(next_to_flush)))
+                                next_to_flush += 1
+                    # No sequence-level delay per clarified semantics
+                else:
+                    # Sequential
+                    for (idx, r_key, resolved_request_block, headers_out, full_url, r_val, data_bytes, timeout_s, effective_retry) in prepared_requests:
+                        method = (r_val.get("Method") or "").upper()
+                        _, lines = _process_single_request(idx, total_in_seq, r_key, method, full_url, headers_out, data_bytes, timeout_s, effective_retry, resolved_request_block)
+                        write_log(log_path, "\n".join(lines))
+                        # Respect FlowControl delay between requests only
+                        r_flow = (r_val.get("FlowControl") or {})
+                        delay_seconds = r_flow.get("DelaySeconds", default_delay)
+                        try:
+                            write_log(log_path, f"    Delay {delay_seconds if delay_seconds is not None else 0} s")
+                            if delay_seconds and delay_seconds > 0:
+                                time.sleep(delay_seconds)
+                        except Exception:
+                            pass
+                # No delay when advancing to next sequence per clarified semantics
 
             write_log(log_path, "=== PayloadStash run finished ===")
         else:

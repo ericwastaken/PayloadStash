@@ -72,3 +72,42 @@ StashConfig:
               - 3
               - 5
               - 10
+    - Name: ConcurrentSeq          # Name of the sequence
+      Type: Concurrent             # Requests run concurrently
+      ConcurrencyLimit: 4
+      Requests:
+        - GetObject_7: # First request
+            Method: GET            # HTTP method
+            URLPath: /objects/7    # API endpoint path
+            Body: # Request body
+              someOther: value2
+              timestamp_resolve_time: { $timestamp: epoch_ms }
+              timestamp_request_time: { $timestamp: { format: epoch_ms, when: request } }
+              username: { $dynamic: user_name }
+            Retry: Null           # Disable retry for this request
+        - GetObject_3: # First request
+            Method: GET            # HTTP method
+            URLPath: /objects/3    # API endpoint path
+            Body: # Request body
+              someOther: value2
+              timestamp_resolve_time: { $timestamp: epoch_ms }
+              timestamp_request_time: { $timestamp: { format: epoch_ms, when: request } }
+              username: { $dynamic: user_name }
+            Retry: Null           # Disable retry for this request
+        - GetObject_5: # First request
+            Method: GET            # HTTP method
+            URLPath: /objects/5    # API endpoint path
+            Body: # Request body
+              someOther: value2
+              timestamp_resolve_time: { $timestamp: epoch_ms }
+              timestamp_request_time: { $timestamp: { format: epoch_ms, when: request } }
+              username: { $dynamic: user_name }
+        - GetObject_10: # First request
+            Method: GET            # HTTP method
+            URLPath: /objects/10    # API endpoint path
+            Body: # Request body
+              someOther: value2
+              timestamp_resolve_time: { $timestamp: epoch_ms }
+              timestamp_request_time: { $timestamp: { format: epoch_ms, when: request } }
+              username: { $dynamic: user_name }
+            Retry: Null           # Disable retry for this request
