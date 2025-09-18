@@ -233,15 +233,16 @@ def run(config: Path, out_dir: Path, max_workers: int | None, dry_run: bool):
                         headers_out['Content-Type'] = 'application/json; charset=utf-8'
 
                     # Log the prepared request
+                    click.echo(f"  Request {j}/{len(req_items)}: {r_key}")
                     write_log(log_path, f"  Request {j}/{len(req_items)}: {r_key}")
-                    write_log(log_path, f"  URL: {full_url}")
+                    write_log(log_path, f"    URL: {full_url}")
 
                     if dry_run:
-                        write_log(log_path, "  DRY-RUN: would make request (skipped)")
-                        log_yaml(log_path, "  Resolved Request:", {r_key: {"Method": method, "URLRoot": url_root, "URLPath": url_path, "Headers": headers_res, "Body": body_res, "Query": query_res, "TimeoutSeconds": timeout_s}}, indent=4)
+                        write_log(log_path, "    DRY-RUN: would make request (skipped)")
+                        log_yaml(log_path, "    Resolved Request:", {r_key: {"Method": method, "URLRoot": url_root, "URLPath": url_path, "Headers": headers_res, "Body": body_res, "Query": query_res, "TimeoutSeconds": timeout_s}}, indent=4)
                     else:
                         # Log resolved request before making the call
-                        log_yaml(log_path, "  Resolved Request:", {r_key: {"Method": method, "URLRoot": url_root, "URLPath": url_path, "Headers": headers_res, "Body": body_res, "Query": query_res, "TimeoutSeconds": timeout_s}}, indent=4)
+                        log_yaml(log_path, "    Resolved Request:", {r_key: {"Method": method, "URLRoot": url_root, "URLPath": url_path, "Headers": headers_res, "Body": body_res, "Query": query_res, "TimeoutSeconds": timeout_s}}, indent=4)
                         # Make HTTP request with timeout, catch timeout as failure
                         try:
                             req_obj = urlrequest.Request(full_url, data=data_bytes, headers=headers_out, method=method)
@@ -261,19 +262,44 @@ def run(config: Path, out_dir: Path, max_workers: int | None, dry_run: bool):
                                     resp_text = resp_body.decode('utf-8', errors='replace')
                                 except Exception:
                                     resp_text = str(resp_body)
-                                write_log(log_path, f"  Response: HTTP {status}")
-                                log_yaml(log_path, "  Response Headers:", resp_headers)
-                                # Avoid logging huge bodies verbatim; clip
-                                preview = resp_text[:2000]
-                                write_log(log_path, "  Response Body (first 2000 chars):")
-                                write_log(log_path, preview)
+                                write_log(log_path, f"    Response: HTTP {status}")
+                                log_yaml(log_path, "    Response Headers:", resp_headers, indent=6)
+                                # Write response body to a file instead of logging it
+                                try:
+                                    # Decide file extension based on Content-Type header (use subtype, e.g., application/json -> json)
+                                    ct_value = None
+                                    for hk, hv in (resp_headers or {}).items():
+                                        try:
+                                            if str(hk).lower() == 'content-type':
+                                                ct_value = str(hv)
+                                                break
+                                        except Exception:
+                                            continue
+                                    ext = 'txt'
+                                    if isinstance(ct_value, str) and ct_value:
+                                        try:
+                                            ct_main = ct_value.split(';', 1)[0].strip()
+                                            if '/' in ct_main:
+                                                subtype = ct_main.split('/', 1)[1].strip()
+                                                if subtype:
+                                                    ext = subtype.lower()
+                                        except Exception:
+                                            pass
+                                    resp_out_name = f"seq{i:02d}-req{j:02d}-{r_key}-response.{ext}"
+                                    resp_out_path = run_root / resp_out_name
+                                    with resp_out_path.open('w', encoding='utf-8') as rf:
+                                        rf.write(resp_text)
+                                    write_log(log_path, f"    Response Body: written to {resp_out_path}")
+                                except Exception as we:
+                                    write_log(log_path, f"    Warning: failed to write response body file: {we}")
                         except socket.timeout as te:
-                            write_log(log_path, f"  ERROR: Request timed out after {timeout_s}s: {te}")
+                            write_log(log_path, f"    ERROR: Request timed out after {timeout_s}s: {te}")
                         except Exception as he:
-                            write_log(log_path, f"  ERROR: Request failed: {he}")
+                            write_log(log_path, f"    ERROR: Request failed: {he}")
 
                     # Respect FlowControl delay between requests
                     try:
+                        write_log(log_path, f"    Delay {delay_seconds if delay_seconds is not None else 0} s")
                         if delay_seconds and delay_seconds > 0:
                             time.sleep(delay_seconds)
                     except Exception:

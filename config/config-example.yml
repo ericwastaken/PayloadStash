@@ -22,7 +22,7 @@ StashConfig:
 
   # Default settings applied to all requests unless overridden
   Defaults:
-    URLRoot: https://api.example.com
+    URLRoot: https://api.restful-api.dev
     FlowControl:
       DelaySeconds: 2
       TimeoutSeconds: 2
@@ -53,16 +53,21 @@ StashConfig:
     - Name: ExampleSeq             # Name of the sequence
       Type: Sequential             # Requests run in sequence
       Requests:
-        - GetState: # First request
+        - GetObject_7: # First request
             Method: GET            # HTTP method
-            URLPath: /state        # API endpoint path
+            URLPath: /objects/7    # API endpoint path
             Body: # Request body
               someOther: value2
               timestamp_resolve_time: { $timestamp: epoch_ms }
               timestamp_request_time: { $timestamp: { format: epoch_ms, when: request } }
             Retry: Null           # Disable retry for this request
-        - GetConfig: # Second request
+        - GetObjects_3_5_10: # Second request
             Method: GET
-            URLPath: /config
+            URLPath: /objects
+            Query:
+              id:
+              - 3
+              - 5
+              - 10
             Body:
               ts_iso_request_time: { $func: timestamp, format: iso_8601, when: request }

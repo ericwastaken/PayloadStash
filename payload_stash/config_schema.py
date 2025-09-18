@@ -148,6 +148,22 @@ class Sequence(BaseModel):
             raise ValueError("ConcurrencyLimit should not be set when Type is 'Sequential'")
         return self
 
+    @model_validator(mode='after')
+    def check_unique_request_keys(self) -> 'Sequence':
+        # Ensure request keys within this sequence are unique
+        keys = [item.key for item in self.Requests]
+        seen = set()
+        dups: list[str] = []
+        for k in keys:
+            if k in seen and k not in dups:
+                dups.append(k)
+            seen.add(k)
+        if dups:
+            raise ValueError(
+                f"Duplicate request keys are not allowed within a sequence. Duplicates found: {dups}"
+            )
+        return self
+
 
 class FlowControlCfg(BaseModel):
     model_config = ConfigDict(extra='forbid')
@@ -171,6 +187,22 @@ class StashConfig(BaseModel):
         # Additionally ensure URLRoot non-empty
         if not isinstance(self.Defaults.URLRoot, str) or not self.Defaults.URLRoot.strip():
             raise ValueError("Defaults.URLRoot is required and must be a non-empty string")
+        return self
+
+    @model_validator(mode='after')
+    def check_unique_sequence_names(self) -> 'StashConfig':
+        # Ensure sequence names are unique across the config
+        names = [seq.Name for seq in self.Sequences]
+        seen = set()
+        dups: list[str] = []
+        for n in names:
+            if n in seen and n not in dups:
+                dups.append(n)
+            seen.add(n)
+        if dups:
+            raise ValueError(
+                f"Duplicate sequence names are not allowed. Duplicates found: {dups}"
+            )
         return self
 
 
