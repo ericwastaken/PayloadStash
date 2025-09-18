@@ -35,7 +35,7 @@ def write_log(log_file: PathLike, message: str, newline: bool = True) -> None:
         f.write(text)
 
 
-def start_run_log(log_file: PathLike, ts_utc: str, sc_name: str, resolved_config_path: PathLike, max_workers: Optional[int]) -> None:
+def start_run_log(log_file: PathLike, ts_utc: str, sc_name: str, resolved_config_path: PathLike) -> None:
     """
     Initialize the run log with a standardized header for a PayloadStash run.
 
@@ -44,13 +44,10 @@ def start_run_log(log_file: PathLike, ts_utc: str, sc_name: str, resolved_config
     - ts_utc: Timestamp string in UTC (already formatted).
     - sc_name: StashConfig name.
     - resolved_config_path: Path to the resolved config file.
-    - max_workers: Optional concurrency cap; logged when provided.
     """
     write_log(log_file, f"=== PayloadStash run started at {ts_utc} UTC ===")
     write_log(log_file, f"Name: {sc_name}")
     write_log(log_file, f"Resolved config: {resolved_config_path}")
-    if max_workers is not None:
-        write_log(log_file, f"Max Workers: {max_workers}")
     write_log(log_file, "--- Sequences ---")
 
 

@@ -55,24 +55,14 @@ def validate(config: Path, writeresolved: bool):
 @main.command(help="Run a PayloadStash config: validate, resolve, write resolved, then process sequences and requests.")
 @click.argument("config", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.option("--out", "out_dir", required=True, type=click.Path(file_okay=False, path_type=Path), help="Output directory root for run artifacts.")
-@click.option("--max-workers", type=int, required=False, help="Optional upper bound for concurrency across the whole run.")
 @click.option("--dry-run", is_flag=True, help="Resolve request configs and log actions, but do not actually make HTTP requests.")
 @click.option("--yes", is_flag=True, help="Automatically continue without prompting for confirmation.")
 
-def run(config: Path, out_dir: Path, max_workers: int | None, dry_run: bool, yes: bool):
+def run(config: Path, out_dir: Path, dry_run: bool, yes: bool):
     # 1) Basic argument validation
     if out_dir is None:
         click.echo("Error: --out is required", err=True)
         sys.exit(9)
-    if max_workers is not None:
-        try:
-            int(max_workers)
-        except Exception:
-            click.echo("Error: --max-workers must be an integer", err=True)
-            sys.exit(9)
-        if max_workers <= 0:
-            click.echo("Error: --max-workers must be > 0", err=True)
-            sys.exit(9)
 
     # 2) Validate config and build resolved dict (resolve-time expansion)
     try:
@@ -116,8 +106,6 @@ def run(config: Path, out_dir: Path, max_workers: int | None, dry_run: bool, yes
     click.echo(f"  Name:            {sc_name}")
     click.echo(f"  Sequences:       {len(sequences)}")
     click.echo(f"  Total Requests:  {total_requests}")
-    if max_workers is not None:
-        click.echo(f"  Max Workers:     {max_workers}")
     click.echo(f"  Output folder:   {run_root}")
     click.echo(f"  Resolved config: {resolved_path}")
     click.echo(f"  Log file:        {log_path}")
@@ -141,16 +129,11 @@ def run(config: Path, out_dir: Path, max_workers: int | None, dry_run: bool, yes
             import time
             from urllib import parse as urlparse
             import json
-            # Size the connection pool to accommodate concurrency when used
+            # Size the connection pool conservatively; concurrency is determined by config
             pool_size = 50
-            try:
-                if max_workers is not None and int(max_workers) > 0:
-                    pool_size = max(50, int(max_workers))
-            except Exception:
-                pass
             rm = RequestManager(pool_maxsize=pool_size)
 
-            start_run_log(log_path, ts, sc_name, resolved_path, max_workers)
+            start_run_log(log_path, ts, sc_name, resolved_path)
 
             # Pull defaults (including URLRoot) and flow control
             sc_resolved = resolved.get("StashConfig", {})
@@ -367,11 +350,6 @@ def run(config: Path, out_dir: Path, max_workers: int | None, dry_run: bool, yes
                     if conc_limit:
                         try:
                             caps.append(int(conc_limit))
-                        except Exception:
-                            pass
-                    if max_workers:
-                        try:
-                            caps.append(int(max_workers))
                         except Exception:
                             pass
                     cap = min(caps) if caps else None

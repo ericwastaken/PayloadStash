@@ -19,7 +19,7 @@ saved to disk with file extensions based on **Content‑Type**.
 
 ---
 
-## Quick Start
+## Quick Start - Native
 
 ```bash
 # 1) Install (example) - note see DEVELOPER INSTALL below for dev setup!
@@ -34,6 +34,24 @@ payloadstash validate path/to/config.yml
 # 4) Emit the fully-resolved config (after anchors & merges)
 payloadstash resolve path/to/config.yml --out ./out
 ```
+
+---
+
+## Quick Start - Docker
+
+- Prerequisites: Docker and Docker Compose (v2 preferred).
+- Build the image (one-time or when sources change):
+  `./x-docker-build-payloadstash.sh`
+- Validate a config inside the container (from the host's ./config dir:)
+  `./x-docker-run-payloadstash.sh validate config-example.yml`
+- Run a config (writes outputs under ./output on the host):
+  `./x-docker-run-payloadstash.sh run config-example.yml`
+
+Notes:
+- The run script mounts ./config -> /app/config and ./output -> /app/output.
+- If you pass --out/-o, it is rewritten to /app/output automatically; otherwise the script adds --out /app/output for 'run'.
+- Relative config paths are assumed to be under ./config and are rewritten to /app/config/<path> in the container.
+- Before the app starts, the script prints the exact host directories being mounted.
 
 ---
 
@@ -620,7 +638,7 @@ out/PXXX-Tester-01/2025-09-17T15-42-10Z/PXXX-Tester-01-log.txt
 ## CLI Usage
 
 ```bash
-payloadstash run CONFIG.yml --out ./out [--max-workers 16] [--dry-run] [--yes]
+payloadstash run CONFIG.yml --out ./out [--dry-run] [--yes]
 
 payloadstash validate CONFIG.yml
 
@@ -738,3 +756,25 @@ StashConfig:
 ---
 
 Happy stashing!!️
+
+
+
+---
+
+## Docker
+
+If you prefer to use Docker:
+
+- Build the image (one-time or when sources change):
+
+  ./x-docker-build-payloadstash.sh
+
+- Run commands inside the container (assumes the image is already built):
+
+  ./x-docker-run-payloadstash.sh validate my-config.yml
+  ./x-docker-run-payloadstash.sh run my-config.yml
+
+Notes:
+- The run script mounts ./config to /app/config and ./output to /app/output inside the container.
+- If you pass --out/-o, the path is rewritten to /app/output.
+- Relative config paths are assumed to be under ./config.

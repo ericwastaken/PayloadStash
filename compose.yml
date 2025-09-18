@@ -1,0 +1,16 @@
+services:
+  payloadstash:
+    platform: linux/amd64
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: payloadstash:local
+    working_dir: /app
+    volumes:
+      - ./config:/app/config
+      - ./output:/app/output
+    # Default command can be overridden by the helper script
+    entrypoint: ["payloadstash"]
+    command: ["--help"]
+
+# Use Docker Compose v2 schema by default (no explicit version needed)
