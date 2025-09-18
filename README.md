@@ -49,6 +49,7 @@ PayloadStash writes responses to a deterministic path with a **timestamped run f
         <RequestKey>.<ext>
       <original-config>-results.csv
       <original-config>-resolved.yml
+      <original-config>-log.txt
 ```
 
 **Example**
@@ -65,6 +66,7 @@ out/
         GrantItem.json
       PXXX-Tester-01-results.csv
       PXXX-Tester-01-resolved.yml
+      PXXX-Tester-01-log.txt
 ```
 
 ---
@@ -569,6 +571,31 @@ GetGeneralData,GetConfig,2025-09-17T15:42:11Z,200,123
 GetGeneralData,GetCatalog,2025-09-17T15:42:11Z,500,87
 GetPlayer01,GetState,2025-09-17T15:42:12Z,200,212
 GetPlayer01,GrantItem,2025-09-17T15:42:13Z,200,145
+```
+
+---
+
+## Run Log
+
+Every run produces a detailed human-readable log file to aid observability and troubleshooting.
+
+- File name: <original-config>-log.txt
+- Location: alongside the run’s resolved config and results CSV in the timestamped run directory
+- Created by: payloadstash run
+- Purpose: records high-detail, chronological information about the run, including start/end markers, configuration 
+  resolution notices, per-request progress markers, retry decisions, HTTP status summaries, and any non-fatal errors 
+  encountered. This log is intended to complement the structured <original-config>-results.csv file.
+
+File path:
+
+```
+<out>/<StashConfig.Name>/<RunTimestamp>/<original-config>-log.txt
+```
+
+Example:
+
+```
+out/PXXX-Tester-01/2025-09-17T15-42-10Z/PXXX-Tester-01-log.txt
 ```
 
 ---
