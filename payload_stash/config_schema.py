@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, Tuple
 
 import yaml
 from pydantic import BaseModel, Field, ValidationError, ConfigDict, model_validator, field_validator
@@ -336,7 +336,7 @@ def _resolve_func_obj(obj: Dict[str, Any]) -> Any:
     raise ValueError(f"Unknown function in config: {func_name}")
 
 
-def _resolve_dynamic_obj(obj: Dict[str, Any], dyn: Optional[Dynamics]) -> Any:
+def _resolve_dynamic_obj(obj: Dict[str, Any], dyn: Optional[Dynamics], secrets: Optional[Dict[str, str]] = None, redact_secrets: bool = False, resolved_cache: Optional[Dict[str, Any]] = None) -> Any:
     """
     Evaluate a $dynamic object using the provided dynamics context.
     Forms:
@@ -357,31 +357,70 @@ def _resolve_dynamic_obj(obj: Dict[str, Any], dyn: Optional[Dynamics]) -> Any:
     template = pat.template
     sets = dyn.sets or {}
     if when == "request":
+        # Validate template now to ensure secrets/sets are valid, but keep as deferred for request-time materialization
+        try:
+            cfgutil.dynamic_expand(template, sets, secrets=secrets, redact_secrets=True)
+        except Exception as e:
+            # Re-raise to fail validation early with informative message
+            raise e
         return {"$deferred": {"dynamic": {"template": template, "sets": sets}}}
-    # resolve now
-    return cfgutil.dynamic_expand(template, sets)
+    # resolve now: use precomputed cache if available to ensure a single value per pattern per resolved file
+    if resolved_cache is not None:
+        if pattern_name in resolved_cache:
+            return resolved_cache[pattern_name]
+        # If not precomputed, compute and store (fallback safety)
+        resolved_cache[pattern_name] = cfgutil.dynamic_expand(template, sets, secrets=secrets, redact_secrets=redact_secrets)
+        return resolved_cache[pattern_name]
+    return cfgutil.dynamic_expand(template, sets, secrets=secrets, redact_secrets=redact_secrets)
 
 
-def _resolve_values(value: Any, dyn: Optional[Dynamics]) -> Any:
-    """Recursively resolve any function-call or $dynamic objects inside dicts/lists/primitives.
+def _resolve_values(value: Any, dyn: Optional[Dynamics], secrets: Optional[Dict[str, str]] = None, redact_secrets: bool = False, resolved_cache: Optional[Dict[str, Any]] = None) -> Any:
+    """Recursively resolve any function-call, $dynamic objects, and $secrets references.
 
-    Notes:
-    - Objects with "$deferred" are preserved for request-time resolution.
+    - Supports mapping form: {"$secrets": "keyName"}
+    - Supports inline string form: "... { $secrets: keyName } ..."
+    - When redact_secrets is True, any resolved secret values are replaced with "***REDACTED***" in the returned structure.
+    - If a secret is requested but no secrets were provided, raises a ValueError.
     """
+    # Helper for inline secret replacement inside strings
+    def _replace_inline_secrets(s: str) -> str:
+        import re as _re
+        pattern = _re.compile(r"\{\s*\$secrets\s*:\s*([A-Za-z0-9_\-\.]+)\s*\}")
+        def _rep(m):
+            key = m.group(1)
+            if secrets is None:
+                raise ValueError(f"Secret '{key}' requested but no --secrets file was provided")
+            if key not in secrets:
+                raise ValueError(f"Unknown secret requested: '{key}'")
+            return "***REDACTED***" if redact_secrets else str(secrets[key])
+        return pattern.sub(_rep, s)
+
     if isinstance(value, dict):
         # Don't touch already-deferred nodes
         if "$deferred" in value:
             return value
+        # Mapping form for secrets
+        if "$secrets" in value:
+            skey = value.get("$secrets")
+            if not isinstance(skey, str):
+                raise ValueError("$secrets must be used as a string key name, e.g., { $secrets: my_key }")
+            if secrets is None:
+                raise ValueError(f"Secret '{skey}' requested but no --secrets file was provided")
+            if skey not in secrets:
+                raise ValueError(f"Unknown secret requested: '{skey}'")
+            return "***REDACTED***" if redact_secrets else str(secrets[skey])
         # Check if this dict itself is a function-call object
         if "$func" in value or "$timestamp" in value:
             return _resolve_func_obj(value)
         # Check if it's a dynamic object
         if "$dynamic" in value:
-            return _resolve_dynamic_obj(value, dyn)
+            return _resolve_dynamic_obj(value, dyn, secrets, redact_secrets, resolved_cache)
         # Else resolve each entry
-        return {k: _resolve_values(v, dyn) for k, v in value.items()}
+        return {k: _resolve_values(v, dyn, secrets, redact_secrets, resolved_cache) for k, v in value.items()}
     if isinstance(value, list):
-        return [_resolve_values(v, dyn) for v in value]
+        return [_resolve_values(v, dyn, secrets, redact_secrets, resolved_cache) for v in value]
+    if isinstance(value, str):
+        return _replace_inline_secrets(value)
     # primitives unchanged
     return value
 
@@ -397,7 +436,7 @@ except Exception:
     pass
 
 
-def build_resolved_config_dict(cfg: TopLevelConfig) -> Dict[str, Any]:
+def build_resolved_config_dict(cfg: TopLevelConfig, secrets: Optional[Dict[str, str]] = None, redact_secrets: bool = False) -> Dict[str, Any]:
     """Build a fully-resolved config dict with Defaults and Forced applied into each Request.
 
     Rules:
@@ -412,6 +451,15 @@ def build_resolved_config_dict(cfg: TopLevelConfig) -> Dict[str, Any]:
 
     dyn = getattr(cfg, 'dynamics', None)
 
+    # Precompute resolve-time dynamic values once per config to ensure consistency across requests
+    resolved_dyn_cache: Optional[Dict[str, Any]] = None
+    if dyn is not None:
+        resolved_dyn_cache = {}
+        sets = dyn.sets or {}
+        for name, pat in dyn.patterns.items():
+            # Compute a single value per pattern for this resolved file
+            resolved_dyn_cache[name] = cfgutil.dynamic_expand(pat.template, sets, secrets=secrets, redact_secrets=redact_secrets)
+
     # Helper to detect if a Pydantic field was provided (even if its value is None)
     def _provided(m: Any, field_name: str) -> bool:
         try:
@@ -422,14 +470,14 @@ def build_resolved_config_dict(cfg: TopLevelConfig) -> Dict[str, Any]:
             return field_name in fs
         return False
 
-    out: Dict[str, Any] = {"StashConfig": {"Name": sc.Name}}
+    sc_out: Dict[str, Any] = {"Name": sc.Name}
 
     # Preserve top-level Retry if present (even if explicitly null)
     if _provided(sc, 'RetryCfg'):
         if sc.RetryCfg is None:
-            out["StashConfig"]["Retry"] = None
+            sc_out["Retry"] = None
         else:
-            out["StashConfig"]["Retry"] = sc.RetryCfg.model_dump(by_alias=True, exclude_none=True)
+            sc_out["Retry"] = sc.RetryCfg.model_dump(by_alias=True, exclude_none=True)
 
     # It can be useful to keep Defaults/Forced as-is for reference
     if defaults is not None:
@@ -444,27 +492,27 @@ def build_resolved_config_dict(cfg: TopLevelConfig) -> Dict[str, Any]:
                 fc["TimeoutSeconds"] = defaults.FlowControl.TimeoutSeconds
             d["FlowControl"] = fc
         if defaults.Headers is not None:
-            d["Headers"] = _resolve_values(_copy_map(defaults.Headers), dyn)
+            d["Headers"] = _resolve_values(_copy_map(defaults.Headers), dyn, secrets, redact_secrets, resolved_dyn_cache)
         if defaults.Body is not None:
-            d["Body"] = _resolve_values(_copy_map(defaults.Body), dyn)
+            d["Body"] = _resolve_values(_copy_map(defaults.Body), dyn, secrets, redact_secrets, resolved_dyn_cache)
         if defaults.Query is not None:
-            d["Query"] = _resolve_values(_copy_map(defaults.Query), dyn)
+            d["Query"] = _resolve_values(_copy_map(defaults.Query), dyn, secrets, redact_secrets, resolved_dyn_cache)
         if _provided(defaults, 'RetryCfg'):
             if defaults.RetryCfg is None:
                 d["Retry"] = None
             else:
                 d["Retry"] = defaults.RetryCfg.model_dump(by_alias=True, exclude_none=True)
         if d:
-            out["StashConfig"]["Defaults"] = d
+            sc_out["Defaults"] = d
 
     if forced is not None:
         f: Dict[str, Any] = {}
         if forced.Headers is not None:
-            f["Headers"] = _resolve_values(_copy_map(forced.Headers), dyn)
+            f["Headers"] = _resolve_values(_copy_map(forced.Headers), dyn, secrets, redact_secrets, resolved_dyn_cache)
         if forced.Body is not None:
-            f["Body"] = _resolve_values(_copy_map(forced.Body), dyn)
+            f["Body"] = _resolve_values(_copy_map(forced.Body), dyn, secrets, redact_secrets, resolved_dyn_cache)
         if forced.Query is not None:
-            f["Query"] = _resolve_values(_copy_map(forced.Query), dyn)
+            f["Query"] = _resolve_values(_copy_map(forced.Query), dyn, secrets, redact_secrets, resolved_dyn_cache)
         if _provided(forced, 'RetryCfg'):
             # Generally Forced.Retry is not expected; but if provided, include for transparency (including explicit null)
             if forced.RetryCfg is None:
@@ -472,7 +520,7 @@ def build_resolved_config_dict(cfg: TopLevelConfig) -> Dict[str, Any]:
             else:
                 f["Retry"] = forced.RetryCfg.model_dump(by_alias=True, exclude_none=True)
         if f:
-            out["StashConfig"]["Forced"] = f
+            sc_out["Forced"] = f
 
 
     # Sequences with resolved requests
@@ -506,9 +554,9 @@ def build_resolved_config_dict(cfg: TopLevelConfig) -> Dict[str, Any]:
                 query.update(forced.Query)
 
             # resolve any function-call or dynamic objects after merges
-            headers = _resolve_values(headers, dyn) if headers is not None else None
-            body = _resolve_values(body, dyn) if body is not None else None
-            query = _resolve_values(query, dyn) if query is not None else None
+            headers = _resolve_values(headers, dyn, secrets, redact_secrets, resolved_dyn_cache) if headers is not None else None
+            body = _resolve_values(body, dyn, secrets, redact_secrets, resolved_dyn_cache) if body is not None else None
+            query = _resolve_values(query, dyn, secrets, redact_secrets, resolved_dyn_cache) if query is not None else None
 
             # resolve retry precedence with explicit-null awareness
             retry_set = False
@@ -566,5 +614,12 @@ def build_resolved_config_dict(cfg: TopLevelConfig) -> Dict[str, Any]:
         seq_out["Requests"] = resolved_requests
         seq_list.append(seq_out)
 
-    out["StashConfig"]["Sequences"] = seq_list
-    return out
+    sc_out["Sequences"] = seq_list
+
+    # Build final output with 'Static Dynamics' at the top, then StashConfig
+    final_out: Dict[str, Any] = {}
+    if resolved_dyn_cache is not None and len(resolved_dyn_cache) > 0:
+        final_out["Static Dynamics"] = resolved_dyn_cache
+    final_out["StashConfig"] = sc_out
+
+    return final_out

@@ -101,7 +101,11 @@ class RequestManager:
             delay = min(delay, max_backoff)
         # Jitter handling
         if jitter is True or (isinstance(jitter, str) and jitter.lower() == "full"):
+            # Full jitter: choose uniformly from [0, delay]
             delay = random.uniform(0, max(delay, 0.0))
+        elif isinstance(jitter, str) and jitter.lower() in ("min", "floor", "at_least_base"):
+            # Min jitter: guarantee at least base seconds, otherwise full jitter up to delay
+            delay = max(base, random.uniform(0, max(delay, 0.0)))
         return max(0.0, float(delay))
 
     def request(
@@ -201,8 +205,9 @@ class RequestManager:
             next_retry_index = attempt  # 1 for first retry after attempt 1
             delay = self._compute_delay(next_retry_index, strategy, base, mult, max_backoff, jitter)
             why = reason if reason else (f"exception: {type(last_exc).__name__}: {last_exc}" if last_exc is not None else "unknown")
+            jitter_repr = (jitter if isinstance(jitter, str) else (True if jitter is True else False))
             log_lines.append(
-                f"Retry: scheduling retry {next_retry_index}/{attempts - 1} due to {why}; backoff={strategy} base={base} mult={mult} max={max_backoff} jitter={bool(jitter)} -> delay {delay:.3f} s"
+                f"Retry: scheduling retry {next_retry_index}/{attempts - 1} due to {why}; backoff={strategy} base={base} mult={mult} max={max_backoff} jitter={jitter_repr} -> delay {delay:.3f} s"
             )
 
             # Enforce max elapsed budget (if configured)

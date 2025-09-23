@@ -207,7 +207,7 @@ StashConfig:
 # 0) Optional header groups for anchors/aliases
 <alias_name>: &<alias_name>
   <HeaderKey>: <string>
-  ...repeat as needed...
+  # ...repeat as needed...
 
 Dynamics:
   patterns:
@@ -253,7 +253,7 @@ StashConfig:
     Multiplier?: <number>           # exponential growth factor (e.g., 2.0)
     MaxBackoffSeconds?: <number>    # cap per-try backoff
     MaxElapsedSeconds?: <number>    # overall cap across all retries (optional)
-    Jitter?: <bool>                 # true = add full jitter (random 0..backoff), false = no jitter
+    Jitter?: <bool|string>         # true or "full" = full jitter (random 0..backoff); "min" = at least BackoffSeconds; false = no jitter
     RetryOnStatus?: [<int>, ...]    # HTTP codes to retry (e.g., [429, 500, 502, 503, 504])
     RetryOnNetworkErrors?: <bool>   # retry on DNS/connect/reset/timeouts (default: true)
     RetryOnTimeouts?: <bool>        # retry when client timeout occurs (default: true)
@@ -280,7 +280,7 @@ StashConfig:
               Multiplier?: <number>
               MaxBackoffSeconds?: <number>
               MaxElapsedSeconds?: <number>
-              Jitter?: <none|full|equal>
+              Jitter?: <false|full|min>
               RetryOnStatus?: [<int>, ...]
               RetryOnNetworkErrors?: <bool>
               RetryOnTimeouts?: <bool>
@@ -311,6 +311,11 @@ How deferral works:
 
 ```python
 from payload_stash.config_utility import resolve_deferred
+
+# Example inputs with deferred markers (as they would appear after resolve-time)
+headers = {"X-Request-Id": {"$deferred": {"func": "timestamp", "format": "epoch_ms"}}}
+query = {"q": "value"}
+body = {"now": {"$deferred": {"func": "timestamp", "format": "iso_8601"}}}
 
 ready_headers = resolve_deferred(headers)
 ready_query = resolve_deferred(query)
@@ -367,6 +372,7 @@ Template placeholders supported:
 - `${uuidv4}` — A standard UUID v4 string, e.g., 3f2b0b9a-3c03-4b0a-b4ad-5d9d3f6e45a7.
 - `${choice:setName}` — Pick one random element from a named set, e.g., teams above returns one of ["00", "01", "02", "03"].
 - `${timestamp[:format]}` — Current UTC timestamp; format options: iso_8601 (default), epoch_ms, epoch_s.
+- `${secrets:secretName}` — Secret value from the secrets file, e.g., `${secrets:api_key}`.
 
 Using a dynamic in a request:
 - Resolve-time (default): materialize immediately during config resolution.
@@ -399,6 +405,14 @@ Notes and behavior:
 - Resolved output: request-time dynamics are preserved in *-resolved.yml as a generic $deferred marker and expanded by 
   the runner at send-time (similar to $func deferral).
 
+Static Dynamics in resolved files:
+- In every -resolved.yml, a top-of-file section named "Static Dynamics" lists the resolve-time values for each defined 
+  dynamic pattern.
+- Any use of { $dynamic: name } that does not specify `when: request` will use the single value shown for that pattern 
+  in "Static Dynamics" throughout the resolved file.
+- If a use specifies `when: request`, the resolved file will contain a $deferred marker for that field and a fresh 
+  value will be generated right before each request is sent.
+
 End-to-end example:
 
   ```yml
@@ -427,6 +441,127 @@ End-to-end example:
               Body:
                 per_call_id: { $dynamic: player_id, when: request }
   ```
+---
+
+## Secrets ($secrets) and the --secrets file
+
+PayloadStash supports injecting secrets into your YAML config at resolve-time using a separate `.env`-style file. This 
+keeps sensitive values out of versioned configs while still allowing convenient use in headers, query strings, or bodies.
+
+Key points:
+- Secrets are provided via a separate file passed to the CLI with `--secrets <path>`.
+- The secrets file uses KEY=VALUE lines and is case-sensitive for both keys and values.
+- Secret values are injected during config resolution. The resolved config written to disk and all run logs will 
+  have secrets redacted as `***REDACTED***`.
+- If a config references a secret but no secrets file is provided, or the key is missing, validation fails with an 
+  informative error.
+
+### Secrets file format
+
+Example `.env`-style file (any filename is fine):
+
+```
+# Comments and blank lines are ignored
+AUTH_TOKEN=abc123DEF
+MixedCaseKey=ValueWithMixedCASE
+QUOTED_VALUE="Bearer abc-123-XYZ"
+SINGLE_QUOTED='value with spaces'
+``` 
+
+Rules:
+- Lines beginning with `#` and blank lines are ignored.
+- Format is `KEY=VALUE`. The key is trimmed; the value is preserved as-is except for trimming surrounding spaces and 
+  stripping matching quotes if the entire value is quoted.
+- Duplicate keys: last one wins.
+- Keys and values are treated as case-sensitive.
+
+### Referencing secrets in YAML
+
+Two equivalent forms are supported inside any of `Headers`, `Query`, or `Body` maps:
+
+1) Mapping form (pure value replacement):
+
+```yml
+Authorization: { $secrets: AUTH_TOKEN }
+```
+
+2) Inline string form (template-like inside a larger string):
+
+```yml
+authorization: "Bearer { $secrets: AUTH_TOKEN }"
+```
+
+Both forms are valid YAML. The inline form is often convenient for tokens with required prefixes.
+
+Example using anchors:
+
+```yml
+common_headers: &common_headers
+  Content-Type: application/json
+  Accept: application/json
+  authorization: "Bearer { $secrets: AUTH_TOKEN }"
+
+StashConfig:
+  Name: ExampleWithSecrets
+  Defaults:
+    URLRoot: https://api.example.com
+    Headers: *common_headers
+  Sequences:
+    - Name: Only
+      Type: Sequential
+      Requests:
+        - Ping:
+            Method: GET
+            URLPath: /health
+```
+
+### Request-time deferral with secrets
+
+Although secrets can be referenced inside dynamic templates and technically support `when: request` just like timestamps, 
+secrets are static values. Deferring their resolution provides no practical benefit because the secret will be identical 
+at resolve-time and at request-time. For clarity and simplicity, prefer resolving secrets at the default time (resolve-time). 
+They will still be redacted in the resolved config and in run logs.
+
+### CLI usage with secrets
+
+- Validate and ensure secrets resolve:
+
+```bash
+payloadstash validate config.yml --secrets ./config/my-secrets.env
+```
+
+- Run with secrets (outputs kept redacted):
+
+```bash
+payloadstash run config.yml --out ./out --secrets ./config/my-secrets.env
+```
+
+Notes:
+- If a secret is referenced and the `--secrets` flag is omitted, validation/run will fail with a clear error.
+- If an unknown secret key is referenced, validation/run will fail.
+- The resolved config written to the run folder will contain `***REDACTED***` in place of any secret value.
+- The run log also redacts any occurrences of loaded secret values.
+
+### Docker usage
+
+When using the provided Docker scripts, mount your secrets file and reference its in-container path with `--secrets`:
+
+- If you place your secrets under the repo’s `./config` directory (mounted to `/app/config` in the container):
+
+```bash
+./x-docker-run-payloadstash.sh run config-example.yml --secrets /app/config/my-secrets.env
+```
+
+### Troubleshooting
+
+- Error: "Secret '<key>' requested but no --secrets file was provided"
+  - Pass a secrets file path with `--secrets`.
+- Error: "Unknown secret requested: '<key>'"
+  - Ensure the key exists in your secrets file (case-sensitive).
+- Secrets not redacted in output
+  - The written resolved config and run log produced by `payloadstash run` will redact automatically. If you dump 
+    structures yourself in custom scripts, avoid logging raw secret values.
+
 ---
 
 ## Merge & Precedence Rules
@@ -544,7 +679,10 @@ The `Retry` block defines how PayloadStash retries failed HTTP requests.
 * **Multiplier** – growth factor for exponential backoff.
 * **MaxBackoffSeconds** – maximum wait allowed for a single retry.
 * **MaxElapsedSeconds** – maximum total time spent across all retries.
-* **Jitter** – `true` adds **full jitter** (random delay between 0 and backoff). `false` means no jitter.
+* **Jitter** – controls randomness in the wait:
+  * `true` or `"full"`: full jitter, random delay between 0 and the computed backoff. This can be less than `BackoffSeconds`.
+  * `"min"`: full jitter with a minimum floor of `BackoffSeconds` (i.e., delay >= `BackoffSeconds`).
+  * `false` or omitted: no jitter.
 * **RetryOnStatus** – list of HTTP status codes to retry (e.g., 429, 500, 502, 503, 504).
 * **RetryOnNetworkErrors** – retry on DNS/connect/reset errors (default: true).
 * **RetryOnTimeouts** – retry when client timeout occurs (default: true).
@@ -678,8 +816,8 @@ Flags:
 
 Exit codes:
 
-* 0 = run success, no validation errors and all requests were http 200s.
-* 1 = run success, but at least one http request was other than http 200s.
+* 0 = run success, no validation errors and all requests were considered successful.
+* 1 = run success, but at least one http request was not successful.
 * 9 = run not successful due to a validation error, or output write error. Output might be partial.
 
 > **Note:** Individual request errors will not cause a premature exit.

@@ -18,7 +18,8 @@ def main():
 @main.command()
 @click.argument("config", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.option("--writeResolved", is_flag=True, help="Apply anchors, Defaults and Forced into each request and write <file>-resolved.yml next to CONFIG.")
-def validate(config: Path, writeresolved: bool):
+@click.option("--secrets", type=click.Path(exists=True, dir_okay=False, path_type=Path), help="Path to secrets file (KEY=VALUE lines) to resolve $secrets references.")
+def validate(config: Path, writeresolved: bool, secrets: Path | None):
     """Validate a YAML CONFIG file against the PayloadStash schema.
 
     When --writeResolved is provided, writes a fully-resolved copy named
@@ -26,13 +27,25 @@ def validate(config: Path, writeresolved: bool):
     """
     try:
         cfg = validate_config_path(config)
+        # Load secrets if provided
+        secrets_map = None
+        if secrets is not None:
+            try:
+                from .config_utility import load_secrets_file
+                secrets_map = load_secrets_file(secrets)
+            except Exception as se:
+                click.echo(f"Failed to load secrets file: {se}", err=True)
+                sys.exit(1)
+        # Attempt to resolve with actual secrets (but do not write yet). This will fail if secrets are required but missing/unknown.
+        _ = build_resolved_config_dict(cfg, secrets=secrets_map, redact_secrets=False)
+
         # If we reach here, validation passed
         sc_name = cfg.StashConfig.Name
         sequences = len(cfg.StashConfig.Sequences)
         click.echo(f"OK: {config} is a valid PayloadStash config. Name='{sc_name}', Sequences={sequences}")
 
         if writeresolved:
-            resolved = build_resolved_config_dict(cfg)
+            resolved_redacted = build_resolved_config_dict(cfg, secrets=secrets_map, redact_secrets=True)
 
             class NoAliasDumper(yaml.SafeDumper):
                 def ignore_aliases(self, data):
@@ -41,7 +54,7 @@ def validate(config: Path, writeresolved: bool):
             out_path = config.with_name(f"{config.stem}-resolved.yml")
             try:
                 with out_path.open('w', encoding='utf-8') as f:
-                    yaml.dump(resolved, f, Dumper=NoAliasDumper, sort_keys=False, allow_unicode=True)
+                    yaml.dump(resolved_redacted, f, Dumper=NoAliasDumper, sort_keys=False, allow_unicode=True)
                 click.echo(f"Wrote resolved config: {out_path}")
             except Exception as we:
                 click.echo(f"Failed to write resolved config: {we}", err=True)
@@ -57,17 +70,29 @@ def validate(config: Path, writeresolved: bool):
 @click.option("--out", "out_dir", required=True, type=click.Path(file_okay=False, path_type=Path), help="Output directory root for run artifacts.")
 @click.option("--dry-run", is_flag=True, help="Resolve request configs and log actions, but do not actually make HTTP requests.")
 @click.option("--yes", is_flag=True, help="Automatically continue without prompting for confirmation.")
+@click.option("--secrets", type=click.Path(exists=True, dir_okay=False, path_type=Path), help="Path to secrets file (KEY=VALUE lines) to resolve $secrets references.")
 
-def run(config: Path, out_dir: Path, dry_run: bool, yes: bool):
+def run(config: Path, out_dir: Path, dry_run: bool, yes: bool, secrets: Path | None):
     # 1) Basic argument validation
     if out_dir is None:
         click.echo("Error: --out is required", err=True)
         sys.exit(9)
 
-    # 2) Validate config and build resolved dict (resolve-time expansion)
+    # 2) Validate config and build resolved dicts (resolve-time expansion)
     try:
         cfg = validate_config_path(config)
-        resolved = build_resolved_config_dict(cfg)
+        # Load secrets
+        secrets_map = None
+        if secrets is not None:
+            try:
+                from .config_utility import load_secrets_file
+                secrets_map = load_secrets_file(secrets)
+            except Exception as se:
+                click.echo(f"Failed to load secrets file: {se}", err=True)
+                sys.exit(9)
+        # Build actual and redacted resolved dicts
+        resolved_actual = build_resolved_config_dict(cfg, secrets=secrets_map, redact_secrets=False)
+        resolved_redacted = build_resolved_config_dict(cfg, secrets=secrets_map, redact_secrets=True)
     except Exception as e:
         click.echo(format_validation_error(e), err=True)
         sys.exit(9)
@@ -91,7 +116,7 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool):
     resolved_path = run_root / f"{config.stem}-resolved.yml"
     try:
         with resolved_path.open('w', encoding='utf-8') as f:
-            yaml.dump(resolved, f, Dumper=NoAliasDumper, sort_keys=False, allow_unicode=True)
+            yaml.dump(resolved_redacted, f, Dumper=NoAliasDumper, sort_keys=False, allow_unicode=True)
     except Exception as e:
         click.echo(f"Error: failed to write resolved config: {e}", err=True)
         sys.exit(9)
@@ -138,6 +163,26 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool):
 
             start_run_log(log_path, ts, sc_name, resolved_path)
 
+            # Logging helpers with secret redaction
+            def _redact_text(s: str) -> str:
+                if not secrets_map or not isinstance(s, str):
+                    return s
+                out = s
+                try:
+                    # Replace longer secrets first to avoid partial overlaps causing leakage
+                    for _k, _v in sorted(secrets_map.items(), key=lambda kv: len(str(kv[1] or "")), reverse=True):
+                        if _v:
+                            out = out.replace(str(_v), "***REDACTED***")
+                except Exception:
+                    pass
+                return out
+
+            def _log_redacted(message: str) -> None:
+                try:
+                    write_log(log_path, _redact_text(message))
+                except Exception:
+                    write_log(log_path, message)
+
             # Initialize results CSV with header
             try:
                 import csv
@@ -145,10 +190,10 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool):
                     w = csv.writer(cf)
                     w.writerow(["sequence", "request", "timestamp", "status", "duration_ms", "attempts"])
             except Exception as e:
-                write_log(log_path, f"Warning: failed to initialize results CSV '{results_csv_path}': {e}")
+                _log_redacted(f"Warning: failed to initialize results CSV '{results_csv_path}': {e}")
 
             # Pull defaults (including URLRoot) and flow control
-            sc_resolved = resolved.get("StashConfig", {})
+            sc_resolved = resolved_actual.get("StashConfig", {})
             defaults_resolved = sc_resolved.get("Defaults", {})
             url_root: str = defaults_resolved.get("URLRoot") or ""
             flow_cfg_defaults = (defaults_resolved.get("FlowControl") or {})
@@ -164,6 +209,28 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool):
             csv_lock = Lock()
             import csv as _csv
 
+            # Helper to redact any occurrences of secret values in strings within a nested structure
+            def _redact_struct(obj):
+                if not secrets_map:
+                    return obj
+                def repl_str(s: str) -> str:
+                    out = s
+                    try:
+                        for _k, _v in secrets_map.items():
+                            if _v:
+                                out = out.replace(str(_v), "***REDACTED***")
+                    except Exception:
+                        pass
+                    return out
+                if isinstance(obj, dict):
+                    return {k: _redact_struct(v) for k, v in obj.items()}
+                if isinstance(obj, list):
+                    return [_redact_struct(v) for v in obj]
+                if isinstance(obj, str):
+                    return repl_str(obj)
+                return obj
+
+
             def _append_result_row(seq_name: str, req_name: str, ts_iso: str, status_code: int, duration_ms: int, attempts: int) -> None:
                 try:
                     with csv_lock:
@@ -171,7 +238,7 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool):
                             w = _csv.writer(cf)
                             w.writerow([seq_name, req_name, ts_iso, status_code, duration_ms, attempts])
                 except Exception as e:
-                    write_log(log_path, f"Warning: failed to append to results CSV: {e}")
+                    _log_redacted(f"Warning: failed to append to results CSV: {e}")
 
             for i, seq_d in enumerate(seq_dicts, start=1):
                 s_name = seq_d.get("Name")
@@ -182,7 +249,7 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool):
                     msg += f", ConcurrencyLimit={s_conc}"
                 msg += ")"
                 click.echo(msg)
-                write_log(log_path, msg)
+                _log_redacted(msg)
 
                 # Create per-sequence output directory (seqNNN-Name)
                 seq_dir_name = f"seq{i:03d}-{s_name}"
@@ -190,7 +257,7 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool):
                 try:
                     seq_out_dir.mkdir(parents=True, exist_ok=True)
                 except Exception as e:
-                    write_log(log_path, f"  Warning: failed to create sequence directory '{seq_out_dir}': {e}")
+                    _log_redacted(f"  Warning: failed to create sequence directory '{seq_out_dir}': {e}")
 
                 # Prepare all requests for this sequence (resolve and persist to resolved file)
                 req_items = seq_d.get("Requests", [])
@@ -198,7 +265,7 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool):
                 # Each tuple: (index, r_key, resolved_request_block, headers_out, full_url, r_val, data_bytes, timeout_s, effective_retry)
                 for j, req_item in enumerate(req_items, start=1):
                     if not isinstance(req_item, dict) or len(req_item) != 1:
-                        write_log(log_path, f"  Skipping malformed request at index {j}")
+                        _log_redacted(f"  Skipping malformed request at index {j}")
                         continue
                     r_key, r_val = next(iter(req_item.items()))
 
@@ -213,27 +280,31 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool):
                     delay_seconds = r_flow.get("DelaySeconds", default_delay)
 
                     # Resolve deferred for sections
-                    headers_res = resolve_deferred(headers) if headers is not None else None
-                    body_res = resolve_deferred(body) if body is not None else None
-                    query_res = resolve_deferred(query) if query is not None else None
+                    headers_res = resolve_deferred(headers, secrets=secrets_map) if headers is not None else None
+                    body_res = resolve_deferred(body, secrets=secrets_map) if body is not None else None
+                    query_res = resolve_deferred(query, secrets=secrets_map) if query is not None else None
 
-                    # Update in-memory resolved dict with URLRoot and resolved sections
+                    # Update resolved dicts with URLRoot and resolved sections
                     try:
-                        resolved["StashConfig"]["Sequences"][i-1]["Requests"][j-1][r_key]["URLRoot"] = url_root
+                        resolved_actual["StashConfig"]["Sequences"][i-1]["Requests"][j-1][r_key]["URLRoot"] = url_root
+                        resolved_redacted["StashConfig"]["Sequences"][i-1]["Requests"][j-1][r_key]["URLRoot"] = url_root
                     except Exception:
                         pass
                     if headers_res is not None:
-                        resolved["StashConfig"]["Sequences"][i-1]["Requests"][j-1][r_key]["Headers"] = headers_res
+                        resolved_actual["StashConfig"]["Sequences"][i-1]["Requests"][j-1][r_key]["Headers"] = headers_res
+                        resolved_redacted["StashConfig"]["Sequences"][i-1]["Requests"][j-1][r_key]["Headers"] = _redact_struct(headers_res)
                     if body_res is not None:
-                        resolved["StashConfig"]["Sequences"][i-1]["Requests"][j-1][r_key]["Body"] = body_res
+                        resolved_actual["StashConfig"]["Sequences"][i-1]["Requests"][j-1][r_key]["Body"] = body_res
+                        resolved_redacted["StashConfig"]["Sequences"][i-1]["Requests"][j-1][r_key]["Body"] = _redact_struct(body_res)
                     if query_res is not None:
-                        resolved["StashConfig"]["Sequences"][i-1]["Requests"][j-1][r_key]["Query"] = query_res
+                        resolved_actual["StashConfig"]["Sequences"][i-1]["Requests"][j-1][r_key]["Query"] = query_res
+                        resolved_redacted["StashConfig"]["Sequences"][i-1]["Requests"][j-1][r_key]["Query"] = _redact_struct(query_res)
 
                     # Overwrite the resolved file on disk after resolving this request
                     try:
-                        write_yaml_file(resolved_path, resolved)
+                        write_yaml_file(resolved_path, resolved_redacted)
                     except Exception as we:
-                        write_log(log_path, f"  Warning: failed to update resolved file after {r_key}: {we}")
+                        _log_redacted(f"  Warning: failed to update resolved file after {r_key}: {we}")
 
                     # Build URL
                     base = (url_root or "").rstrip('/')
@@ -288,14 +359,14 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool):
                     except Exception:
                         pass
                     lines.append(f"  Request {idx}/{total_in_seq}: {r_key}")
-                    lines.append(f"    URL: {full_url}")
+                    lines.append(f"    URL: {_redact_text(full_url)}")
                     # Capture start timestamp (UTC, ISO8601 Z) and log it
                     start_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
                     lines.append(f"    Start: {start_iso}")
                     seq_name_csv = f"{seq_dir_name}"
                     req_name_csv = f"req{idx:03d}-{r_key}"
                     # Log Resolved Request
-                    y_req = yaml_to_string(resolved_request_block).splitlines()
+                    y_req = yaml_to_string(_redact_struct(resolved_request_block)).splitlines()
                     lines.append("    Resolved Request:")
                     lines.extend(["      " + ln for ln in y_req])
                     # Resolved Retry
@@ -328,11 +399,11 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool):
                         )
                         if req_log:
                             for l in req_log.splitlines():
-                                lines.append("    " + l)
+                                lines.append("    " + _redact_text(l))
                         lines.append(f"    Response: HTTP {status}")
                         lines.append(f"    Attempts: {attempts_made}")
                         # Response headers
-                        y_hdr = yaml_to_string(resp_headers).splitlines()
+                        y_hdr = yaml_to_string(_redact_struct(resp_headers)).splitlines()
                         lines.append("    Response Headers:")
                         lines.extend(["      " + ln for ln in y_hdr])
                         # Write body to file
@@ -410,7 +481,7 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool):
 
                 if s_type.lower() == "concurrent":
                     workers = _effective_workers()
-                    write_log(log_path, f"  Using concurrency: workers={workers}")
+                    _log_redacted(f"  Using concurrency: workers={workers}")
                     outcomes: dict[int, list[str]] = {}
                     next_to_flush = 1
                     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix=f"seq{i:03d}") as ex:
@@ -423,7 +494,7 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool):
                             idx, lines = fut.result()
                             outcomes[idx] = lines
                             while next_to_flush in outcomes:
-                                write_log(log_path, "\n".join(outcomes.pop(next_to_flush)))
+                                _log_redacted("\n".join(outcomes.pop(next_to_flush)))
                                 next_to_flush += 1
                     # No sequence-level delay per clarified semantics
                 else:
@@ -431,19 +502,19 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool):
                     for (idx, r_key, resolved_request_block, headers_out, full_url, r_val, data_bytes, timeout_s, effective_retry) in prepared_requests:
                         method = (r_val.get("Method") or "").upper()
                         _, lines = _process_single_request(idx, total_in_seq, r_key, method, full_url, headers_out, data_bytes, timeout_s, effective_retry, resolved_request_block)
-                        write_log(log_path, "\n".join(lines))
+                        _log_redacted("\n".join(lines))
                         # Respect FlowControl delay between requests only
                         r_flow = (r_val.get("FlowControl") or {})
                         delay_seconds = r_flow.get("DelaySeconds", default_delay)
                         try:
-                            write_log(log_path, f"    Delay {delay_seconds if delay_seconds is not None else 0} s")
+                            _log_redacted(f"    Delay {delay_seconds if delay_seconds is not None else 0} s")
                             if delay_seconds and delay_seconds > 0:
                                 time.sleep(delay_seconds)
                         except Exception:
                             pass
                 # No delay when advancing to next sequence per clarified semantics
 
-            write_log(log_path, "=== PayloadStash run finished ===")
+            _log_redacted("=== PayloadStash run finished ===")
         else:
             click.echo("\nOperation Cancelled")
     except Exception:
