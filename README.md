@@ -443,7 +443,7 @@ End-to-end example:
   ```
 ---
 
-## Secrets ($secrets) and the --secrets file
+## Secrets ($secrets) and the --secrets argument
 
 PayloadStash supports injecting secrets into your YAML config at resolve-time using a separate `.env`-style file. This 
 keeps sensitive values out of versioned configs while still allowing convenient use in headers, query strings, or bodies.
