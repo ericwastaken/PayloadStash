@@ -4,6 +4,10 @@ YAML‑driven HTTP fetch‑and‑stash for Python. Define your run once, execute
 response to a clean, predictable folder structure—**with defaults, forced fields, anchors/aliases, concurrency, 
 resilient error handling, and run‑level reporting**.
 
+Note: For the authoritative, formal definition of the YAML configuration grammar (types, constraints, and resolution
+semantics), see “README - Config File Formal Specification.md” at the repository root. This README summarizes usage and
+examples and is kept consistent with that specification.
+
 ## Concept
 
 **PayloadStash** reads a YAML config, resolves YAML anchors, merges **Defaults** and **Forced** values into each 
@@ -253,7 +257,7 @@ StashConfig:
     Multiplier?: <number>           # exponential growth factor (e.g., 2.0)
     MaxBackoffSeconds?: <number>    # cap per-try backoff
     MaxElapsedSeconds?: <number>    # overall cap across all retries (optional)
-    Jitter?: <bool|string>         # true or "full" = full jitter (random 0..backoff); "min" = at least BackoffSeconds; false = no jitter
+    Jitter?: <bool|string>         # boolean or "min"/"max"; see Formal Specification for jitter semantics
     RetryOnStatus?: [<int>, ...]    # HTTP codes to retry (e.g., [429, 500, 502, 503, 504])
     RetryOnNetworkErrors?: <bool>   # retry on DNS/connect/reset/timeouts (default: true)
     RetryOnTimeouts?: <bool>        # retry when client timeout occurs (default: true)
@@ -280,7 +284,7 @@ StashConfig:
               Multiplier?: <number>
               MaxBackoffSeconds?: <number>
               MaxElapsedSeconds?: <number>
-              Jitter?: <false|full|min>
+              Jitter?: <false|min|max|true>
               RetryOnStatus?: [<int>, ...]
               RetryOnNetworkErrors?: <bool>
               RetryOnTimeouts?: <bool>
@@ -288,7 +292,7 @@ StashConfig:
 
 ### Functions & Dynamics inside configs
 
-You can compute certain values using a special object syntax. The following helpers are available:
+You can compute certain values using a special object syntax. Prefer the concise shorthand mapping forms for $ operators where available (e.g., { $timestamp: epoch_ms }, { $dynamic: name }). The following helpers are available:
 
 Functions:
 - timestamp: returns the current UTC time in one of several formats.
@@ -679,10 +683,7 @@ The `Retry` block defines how PayloadStash retries failed HTTP requests.
 * **Multiplier** – growth factor for exponential backoff.
 * **MaxBackoffSeconds** – maximum wait allowed for a single retry.
 * **MaxElapsedSeconds** – maximum total time spent across all retries.
-* **Jitter** – controls randomness in the wait:
-  * `true` or `"full"`: full jitter, random delay between 0 and the computed backoff. This can be less than `BackoffSeconds`.
-  * `"min"`: full jitter with a minimum floor of `BackoffSeconds` (i.e., delay >= `BackoffSeconds`).
-  * `false` or omitted: no jitter.
+* **Jitter** – controls randomness in the wait (boolean or one of "min"/"max"). For precise semantics, see the Formal Specification document. In brief: `false` or omitted = no jitter; `true` = enable jitter with default behavior; strings can refine behavior as "min" or "max".
 * **RetryOnStatus** – list of HTTP status codes to retry (e.g., 429, 500, 502, 503, 504).
 * **RetryOnNetworkErrors** – retry on DNS/connect/reset errors (default: true).
 * **RetryOnTimeouts** – retry when client timeout occurs (default: true).
