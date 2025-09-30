@@ -333,6 +333,15 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool, secrets: Path | N
                     # Effective Retry (already precedence-resolved in resolved config building)
                     effective_retry = r_val.get("Retry") if isinstance(r_val, dict) else None
 
+                    # Response formatting options
+                    response_opts = None
+                    try:
+                        ro = r_val.get("Response") if isinstance(r_val, dict) else None
+                        if isinstance(ro, dict):
+                            response_opts = {k: v for k, v in ro.items() if k in ("PrettyPrint", "Sort")}
+                    except Exception:
+                        response_opts = None
+
                     resolved_request_block = {
                         "Method": method,
                         "URLRoot": url_root,
@@ -342,6 +351,8 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool, secrets: Path | N
                         "Query": query_res,
                         "TimeoutSeconds": timeout_s,
                     }
+                    if response_opts is not None:
+                        resolved_request_block["Response"] = response_opts
 
                     prepared_requests.append((j, r_key, resolved_request_block, headers_out, full_url, r_val, data_bytes, timeout_s, effective_retry))
 
@@ -426,10 +437,94 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool, secrets: Path | N
                                             ext = subtype.lower()
                                 except Exception:
                                     pass
+
+                            # Optional pretty-print / sort based on Response settings and content-type
+                            def _maybe_format_response(text_in: str, content_type: str | None, resp_cfg: dict | None) -> str:
+                                try:
+                                    if not isinstance(resp_cfg, dict) or not resp_cfg:
+                                        return text_in
+                                    sort_flag = bool(resp_cfg.get("Sort"))
+                                    pretty_flag = bool(resp_cfg.get("PrettyPrint")) or sort_flag
+                                    if not pretty_flag:
+                                        return text_in
+                                    ct_main = None
+                                    if isinstance(content_type, str) and content_type:
+                                        ct_main = content_type.split(';', 1)[0].strip().lower()
+                                    # JSON handling
+                                    if ct_main and (ct_main.endswith('/json') or ct_main == 'application/json'):
+                                        try:
+                                            from rich.console import Console
+                                            from rich.json import JSON as RichJSON
+                                            import io as _io
+                                            # If sort requested, we need to ensure keys are sorted; RichJSON supports sort_keys
+                                            s = _io.StringIO()
+                                            console = Console(file=s, no_color=True, force_jupyter=False, force_terminal=False, color_system=None, width=120)
+                                            # RichJSON can take a JSON string directly
+                                            rj = RichJSON(text_in, indent=2, sort_keys=sort_flag)
+                                            console.print(rj)
+                                            return s.getvalue().rstrip() + "\n"
+                                        except Exception:
+                                            # Fallback to standard formatting
+                                            import json as _json2
+                                            try:
+                                                obj = _json2.loads(text_in)
+                                                return _json2.dumps(obj, indent=2, sort_keys=sort_flag, ensure_ascii=False) + "\n"
+                                            except Exception:
+                                                return text_in
+                                    # XML handling
+                                    if ct_main and (ct_main in ('application/xml', 'text/xml') or ct_main.endswith('+xml')):
+                                        try:
+                                            from xml.dom import minidom as _minidom
+                                            dom = _minidom.parseString(text_in.encode('utf-8'))
+                                            if bool(resp_cfg.get("Sort")):
+                                                # Sort attributes and child elements by tag name (simple, shallow sort)
+                                                def sort_node(node):
+                                                    try:
+                                                        if node.nodeType == node.ELEMENT_NODE:
+                                                            # sort attributes
+                                                            if node.hasAttributes():
+                                                                attrs = node.attributes
+                                                                names = sorted([attrs.item(i).name for i in range(attrs.length)])
+                                                                # rebuild attribute order by cloning
+                                                                for n in names:
+                                                                    v = attrs.get(n).value
+                                                                    attrs.removeNamedItem(n)
+                                                                    attrs.setNamedItem(node.ownerDocument.createAttribute(n))
+                                                                    attrs.get(n).value = v
+                                                            # sort children: elements by tagName; recurse
+                                                            children = [c for c in node.childNodes]
+                                                            for c in children:
+                                                                sort_node(c)
+                                                            # reorder element children
+                                                            elems = [c for c in node.childNodes if c.nodeType == c.ELEMENT_NODE]
+                                                            others = [c for c in node.childNodes if c.nodeType != c.ELEMENT_NODE]
+                                                            elems_sorted = sorted(elems, key=lambda e: e.tagName)
+                                                            # Remove all children then append in new order preserving non-elements order
+                                                            for c in list(node.childNodes):
+                                                                node.removeChild(c)
+                                                            for e in elems_sorted:
+                                                                node.appendChild(e)
+                                                            for o in others:
+                                                                node.appendChild(o)
+                                                    except Exception:
+                                                        pass
+                                                sort_node(dom.documentElement)
+                                            pretty_xml = dom.toprettyxml(indent="  ")
+                                            # minidom adds xml declaration; keep as-is
+                                            return pretty_xml
+                                        except Exception:
+                                            return text_in
+                                    return text_in
+                                except Exception:
+                                    return text_in
+
                             resp_out_name = f"req{idx:03d}-{r_key}-response.{ext}"
                             resp_out_path = seq_out_dir / resp_out_name
+                            # Derive Response config from resolved request block
+                            resp_cfg = resolved_request_block.get("Response") if isinstance(resolved_request_block, dict) else None
+                            text_to_write = _maybe_format_response(resp_text, ct_value, resp_cfg)
                             with resp_out_path.open('w', encoding='utf-8') as rf:
-                                rf.write(resp_text)
+                                rf.write(text_to_write)
                             lines.append(f"    Response Body: written to {resp_out_path}")
                         except Exception as we:
                             lines.append(f"    Warning: failed to write response body file: {we}")

@@ -77,6 +77,7 @@ class DefaultsSection(BaseModel):
     Body: Optional[Dict[str, Any]] = None
     Query: Optional[Dict[str, Any]] = None
     RetryCfg: Optional[Retry] = Field(None, alias='Retry')
+    Response: Optional[ResponseCfg] = None
 
 
 class ForcedSection(BaseModel):
@@ -86,6 +87,12 @@ class ForcedSection(BaseModel):
     Body: Optional[Dict[str, Any]] = None
     Query: Optional[Dict[str, Any]] = None
     RetryCfg: Optional[Retry] = Field(None, alias='Retry')
+
+
+class ResponseCfg(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    PrettyPrint: Optional[bool] = None
+    Sort: Optional[bool] = None
 
 
 class Request(BaseModel):
@@ -98,6 +105,7 @@ class Request(BaseModel):
     Query: Optional[Dict[str, Any]] = None
     FlowControl: Optional[FlowControlCfg] = None
     RetryCfg: Optional[Retry] = Field(None, alias='Retry')
+    Response: Optional[ResponseCfg] = None
 
 
 class RequestItem(BaseModel):
@@ -176,7 +184,6 @@ class StashConfig(BaseModel):
     Name: str
     Defaults: DefaultsSection
     Forced: Optional[ForcedSection] = None
-    RetryCfg: Optional[Retry] = Field(None, alias='Retry')
     Sequences: List[Sequence]
 
     @model_validator(mode='after')
@@ -441,7 +448,7 @@ def build_resolved_config_dict(cfg: TopLevelConfig, secrets: Optional[Dict[str, 
 
     Rules:
     - For sections Headers/Body/Query: use request section if present, else Defaults.section; then overlay Forced.section.
-    - Retry precedence respects explicit nulls: request.Retry (even null) > Defaults.Retry (even null) > StashConfig.Retry (even null).
+    - Retry precedence respects explicit nulls: request.Retry (even null) > Defaults.Retry (even null).
       Only fall through when a level omits the Retry field entirely.
     - Anchors are already resolved by yaml.safe_load; we also ensure the resulting dict contains plain maps.
     """
@@ -472,12 +479,6 @@ def build_resolved_config_dict(cfg: TopLevelConfig, secrets: Optional[Dict[str, 
 
     sc_out: Dict[str, Any] = {"Name": sc.Name}
 
-    # Preserve top-level Retry if present (even if explicitly null)
-    if _provided(sc, 'RetryCfg'):
-        if sc.RetryCfg is None:
-            sc_out["Retry"] = None
-        else:
-            sc_out["Retry"] = sc.RetryCfg.model_dump(by_alias=True, exclude_none=True)
 
     # It can be useful to keep Defaults/Forced as-is for reference
     if defaults is not None:
@@ -502,6 +503,8 @@ def build_resolved_config_dict(cfg: TopLevelConfig, secrets: Optional[Dict[str, 
                 d["Retry"] = None
             else:
                 d["Retry"] = defaults.RetryCfg.model_dump(by_alias=True, exclude_none=True)
+        if defaults.Response is not None:
+            d["Response"] = defaults.Response.model_dump(exclude_none=True)
         if d:
             sc_out["Defaults"] = d
 
@@ -568,9 +571,6 @@ def build_resolved_config_dict(cfg: TopLevelConfig, secrets: Optional[Dict[str, 
             elif defaults is not None and _provided(defaults, 'RetryCfg'):
                 retry_set = True
                 retry_value = defaults.RetryCfg
-            elif _provided(sc, 'RetryCfg'):
-                retry_set = True
-                retry_value = sc.RetryCfg
 
             req_out: Dict[str, Any] = {
                 item.key: {
@@ -585,6 +585,11 @@ def build_resolved_config_dict(cfg: TopLevelConfig, secrets: Optional[Dict[str, 
                 inner["Body"] = body
             if query is not None:
                 inner["Query"] = query
+            # Include Response block if provided; else inherit from Defaults if present
+            if req.Response is not None:
+                inner["Response"] = req.Response.model_dump(exclude_none=True)
+            elif defaults is not None and defaults.Response is not None:
+                inner["Response"] = defaults.Response.model_dump(exclude_none=True)
             # Always include effective URLRoot from Defaults
             if defaults and defaults.URLRoot:
                 inner["URLRoot"] = defaults.URLRoot

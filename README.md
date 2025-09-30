@@ -244,23 +244,27 @@ StashConfig:
     #   timestamp: { $func: timestamp, format: iso_8601 }
     Query?:   { <k>: <v>, ... }
 
+    Response:
+      PrettyPrint?: <bool>
+      Sort?: <bool>
+
+    # Optional global retry policy (applies when a request omits Retry)
+    Retry?:
+      Attempts: <int>                 # total tries including the first (e.g., 3)
+      BackoffStrategy: <fixed|exponential>
+      BackoffSeconds: <number>        # base delay (e.g., 0.5)
+      Multiplier?: <number>           # exponential growth factor (e.g., 2.0)
+      MaxBackoffSeconds?: <number>    # cap per-try backoff
+      MaxElapsedSeconds?: <number>    # overall cap across all retries (optional)
+      Jitter?: <bool|string>         # boolean or "min"/"max"; see Formal Specification for jitter semantics
+      RetryOnStatus?: [<int>, ...]    # HTTP codes to retry (e.g., [429, 500, 502, 503, 504])
+      RetryOnNetworkErrors?: <bool>   # retry on DNS/connect/reset/timeouts (default: true)
+      RetryOnTimeouts?: <bool>        # retry when client timeout occurs (default: true)
+
   Forced?:
     Headers?: { <k>: <v>, ... }
     Body?:    { <k>: <v>, ... }
     Query?:   { <k>: <v>, ... }
-  
-  # Optional global retry policy (applies when a request omits Retry)
-  Retry?:
-    Attempts: <int>                 # total tries including the first (e.g., 3)
-    BackoffStrategy: <fixed|exponential>
-    BackoffSeconds: <number>        # base delay (e.g., 0.5)
-    Multiplier?: <number>           # exponential growth factor (e.g., 2.0)
-    MaxBackoffSeconds?: <number>    # cap per-try backoff
-    MaxElapsedSeconds?: <number>    # overall cap across all retries (optional)
-    Jitter?: <bool|string>         # boolean or "min"/"max"; see Formal Specification for jitter semantics
-    RetryOnStatus?: [<int>, ...]    # HTTP codes to retry (e.g., [429, 500, 502, 503, 504])
-    RetryOnNetworkErrors?: <bool>   # retry on DNS/connect/reset/timeouts (default: true)
-    RetryOnTimeouts?: <bool>        # retry when client timeout occurs (default: true)
 
   Sequences:
     - Name: <string>
@@ -288,6 +292,9 @@ StashConfig:
               RetryOnStatus?: [<int>, ...]
               RetryOnNetworkErrors?: <bool>
               RetryOnTimeouts?: <bool>
+            Response:
+              PrettyPrint?: <bool>
+              Sort?: <bool>
 ```
 
 ### Functions & Dynamics inside configs
@@ -723,6 +730,33 @@ Sequences:
 ---
 
 ## Output Files & Extensions
+
+### Response formatting controls (Defaults or per request)
+
+You may control how response bodies are written either globally under `Defaults` or per request. Per-request settings override `Defaults`.
+
+At Defaults level:
+
+```yml
+StashConfig:
+  Defaults:
+    Response:
+      PrettyPrint: true
+      Sort: true
+```
+
+Per-request override:
+
+```yml
+Response:
+  PrettyPrint: true    # pretty print JSON or XML responses
+  Sort: true           # sort output (JSON object keys; XML element children/attributes); implies PrettyPrint
+```
+
+Supported types for PrettyPrint/Sort:
+- JSON (application/json, */json): PrettyPrint uses rich to format; Sort sorts object keys.
+- XML (application/xml, text/xml, +xml): PrettyPrint uses xml.dom.minidom to format; Sort sorts child elements by tag name and attributes alphabetically.
+- Others: ignored; body written as-is.
 
 Each request writes one file per request, named as `reqNNN-<RequestKey>-response.<ext>`, where NNN is the 1-based index within its sequence. The extension is derived from the response Content‑Type.
 

@@ -32,7 +32,6 @@ StashConfig (mapping, extra keys forbidden)
 - `Name`: string (required, non-empty)
 - `Defaults`: DefaultsSection (required)
 - `Forced`: ForcedSection (optional)
-- `Retry`: Retry (optional) [YAML key is "Retry"; internal alias `RetryCfg`]
 - `Sequences`: list<Sequence> (required, non-empty)
 
 ## Validation rules
@@ -53,6 +52,7 @@ StashConfig (mapping, extra keys forbidden)
 - `Body`: map<string, any> (optional)
 - `Query`: map<string, any> (optional)
 - `Retry`: Retry (optional) [internal alias `RetryCfg`]
+- `Response`: ResponseCfg (optional)
 
 ### ForcedSection (mapping, extra keys forbidden)
 - `Headers`: map<string, any> (optional)
@@ -98,6 +98,11 @@ Note: Retry may be explicitly set to null (YAML `null`/`Null`) at any level to d
 - `Query`: map<string, any> (optional)
 - `FlowControl`: FlowControlCfg (optional)
 - `Retry`: Retry (optional) [internal alias `RetryCfg`]
+- `Response`: ResponseCfg (optional)
+
+### ResponseCfg (mapping, extra keys forbidden)
+- `PrettyPrint`: bool (optional) — if true, pretty-prints supported response types when writing files.
+- `Sort`: bool (optional) — if true, sorts the response; implies PrettyPrint. For JSON, sorts object keys; for XML, sorts element children by tag name and attributes alphabetically. Other content types ignored.
 
 ## Value resolution model
 The runner builds a resolved request set from the authored config using these rules:
@@ -108,7 +113,7 @@ The runner builds a resolved request set from the authored config using these ru
    - After merges, resolve special operators (`$dynamic`, `$secrets`, `$timestamp`/`$func`) recursively within the merged maps.
 
 2) Retry precedence with explicit-null awareness
-   - Precedence: `request.Retry` (even if null) > `Defaults.Retry` (even if null) > `StashConfig.Retry` (even if null).
+   - Precedence: `request.Retry` (even if null) > `Defaults.Retry` (even if null).
    - Only fall through when a level omits the `Retry` field entirely.
    - In the resolved output, `Retry` appears under each request if set by precedence. Explicit null is preserved.
 
