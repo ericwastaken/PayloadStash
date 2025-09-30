@@ -42,12 +42,27 @@ class RequestManager:
         # Disable urllib3 warnings about insecure requests not relevant here
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-        # Disable internal retries; we fully control retries/backoff per call
-        self._pool = urllib3.PoolManager(
+        # Prepare secure and insecure pools. We disable internal retries; we fully control retries/backoff per call
+        self._pool_secure = urllib3.PoolManager(
             retries=False,
             num_pools=num_pools,
             maxsize=pool_maxsize,
         )
+        # Insecure pool: disable certificate verification and hostname checking
+        try:
+            import ssl as _ssl
+            ctx = _ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = _ssl.CERT_NONE
+            self._pool_insecure = urllib3.PoolManager(
+                retries=False,
+                num_pools=num_pools,
+                maxsize=pool_maxsize,
+                ssl_context=ctx,
+            )
+        except Exception:
+            # Fallback: if SSL context creation fails, reuse secure pool (verification will be on)
+            self._pool_insecure = self._pool_secure
 
     def _single_attempt(
         self,
@@ -56,12 +71,14 @@ class RequestManager:
         headers: Optional[Dict[str, str]],
         body: Optional[bytes],
         timeout_s: Optional[float],
+        insecure_tls: bool = False,
     ) -> Tuple[int, Dict[str, str], str]:
         timeout = None
         if isinstance(timeout_s, (int, float)) and timeout_s > 0:
             timeout = urllib3.Timeout(total=float(timeout_s))
         # Make the request; urllib3 returns HTTPResponse
-        resp = self._pool.request(
+        pool = self._pool_insecure if insecure_tls else self._pool_secure
+        resp = pool.request(
             method=method.upper(),
             url=url,
             body=body,
@@ -116,6 +133,7 @@ class RequestManager:
         body: Optional[bytes] = None,
         timeout_s: Optional[float] = None,
         retry_cfg: Optional[Dict[str, Any]] = None,
+        insecure_tls: bool = False,
     ) -> Tuple[int, Dict[str, str], str, int, str]:
         """
         Perform an HTTP request with schema-driven retries and backoff.
@@ -126,7 +144,7 @@ class RequestManager:
         log_lines: list[str] = []
         # Fast path: no retry configured
         if not retry_cfg:
-            s, h, t = self._single_attempt(method, url, headers, body, timeout_s)
+            s, h, t = self._single_attempt(method, url, headers, body, timeout_s, insecure_tls)
             return s, h, t, 1, ""
 
         # Map config -> policy with defaults
@@ -157,7 +175,7 @@ class RequestManager:
 
         for attempt in range(1, attempts + 1):
             try:
-                status, resp_headers, resp_text = self._single_attempt(method, url, headers, body, timeout_s)
+                status, resp_headers, resp_text = self._single_attempt(method, url, headers, body, timeout_s, insecure_tls)
                 last_exc = None
             except BaseException as e:
                 last_exc = e

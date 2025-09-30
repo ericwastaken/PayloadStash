@@ -28,6 +28,10 @@ StashConfig:
     FlowControl:
       DelaySeconds: 2
       TimeoutSeconds: 2
+
+    # Disable TLS certificate verification
+    InsecureTLS: true
+
     # Default headers including common headers
     Headers:
       <<: *common_headers

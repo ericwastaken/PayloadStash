@@ -235,7 +235,10 @@ StashConfig:
       # Number of seconds in between sequences and requests (default: 0)
       DelaySeconds: <int>
       TimeoutSeconds: <int>
-      
+    
+    # Allow Insecure TLS
+    InsecureTLS: <bool>
+    
     # Optional Defaults
     Headers?: { <k>: <v>, ... }
     Body?:    { <k>: <v>, ... }
@@ -244,7 +247,8 @@ StashConfig:
     #   timestamp: { $func: timestamp, format: iso_8601 }
     Query?:   { <k>: <v>, ... }
 
-    Response:
+    # Allow Response Processing
+    Response?:
       PrettyPrint?: <bool>
       Sort?: <bool>
 

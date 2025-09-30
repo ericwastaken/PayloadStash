@@ -4,7 +4,8 @@
 - Last updated: 2025-09-23
 
 ## Scope
-- This document formally defines the PayloadStash YAML configuration syntax and resolution rules so that an IDE or LLM can implement authoring, validation, and transformation tools.
+- This document formally defines the PayloadStash YAML configuration syntax and resolution rules so that an IDE or LLM 
+  can implement authoring, validation, and transformation tools.
 - The configuration files are UTF-8 encoded YAML 1.2 documents.
 
 ## High‑level overview
@@ -36,7 +37,8 @@ StashConfig (mapping, extra keys forbidden)
 
 ## Validation rules
 - `StashConfig.Defaults.URLRoot`: non-empty string, required.
-- `StashConfig.Defaults.FlowControl`: required and must include `DelaySeconds` (int>=0) and `TimeoutSeconds` (int>=0). Values validated individually; presence required.
+- `StashConfig.Defaults.FlowControl`: required and must include `DelaySeconds` (int>=0) and `TimeoutSeconds` (int>=0). 
+  Values validated individually; presence required.
 - `Sequence.Name` values must be unique across the config.
 - Within each `Sequence`, Request keys must be unique.
 - For `Sequence.Type`:
@@ -48,6 +50,8 @@ StashConfig (mapping, extra keys forbidden)
 ### DefaultsSection (mapping, extra keys forbidden)
 - `URLRoot`: string (required, non-empty)
 - `FlowControl`: FlowControlCfg (required)
+- `InsecureTLS`: bool (optional; default false). When true, TLS certificate verification and hostname checks are 
+  disabled for requests (similar to curl --insecure).
 - `Headers`: map<string, any> (optional)
 - `Body`: map<string, any> (optional)
 - `Query`: map<string, any> (optional)
@@ -76,7 +80,8 @@ StashConfig (mapping, extra keys forbidden)
 - `RetryOnNetworkErrors`: bool (optional)
 - `RetryOnTimeouts`: bool (optional)
 
-Note: Retry may be explicitly set to null (YAML `null`/`Null`) at any level to disable retries at that level; explicit null is preserved and overrides lower-precedence Retry.
+Note: Retry may be explicitly set to null (YAML `null`/`Null`) at any level to disable retries at that level; explicit 
+null is preserved and overrides lower-precedence Retry.
 
 ## Sequences and Requests
 
@@ -99,10 +104,12 @@ Note: Retry may be explicitly set to null (YAML `null`/`Null`) at any level to d
 - `FlowControl`: FlowControlCfg (optional)
 - `Retry`: Retry (optional) [internal alias `RetryCfg`]
 - `Response`: ResponseCfg (optional)
+- `InsecureTLS`: bool (optional) — overrides `Defaults.InsecureTLS` when provided.
 
 ### ResponseCfg (mapping, extra keys forbidden)
 - `PrettyPrint`: bool (optional) — if true, pretty-prints supported response types when writing files.
-- `Sort`: bool (optional) — if true, sorts the response; implies PrettyPrint. For JSON, sorts object keys; for XML, sorts element children by tag name and attributes alphabetically. Other content types ignored.
+- `Sort`: bool (optional) — if true, sorts the response; implies PrettyPrint. For JSON, sorts object keys; for XML, 
+  sorts element children by tag name and attributes alphabetically. Other content types ignored.
 
 ## Value resolution model
 The runner builds a resolved request set from the authored config using these rules:
@@ -124,10 +131,12 @@ The runner builds a resolved request set from the authored config using these ru
    - Effective `FlowControl` results from `Defaults.FlowControl` overlaid by `request.FlowControl` field-wise (`DelaySeconds`, `TimeoutSeconds`).
 
 5) Dynamics precomputation
-   - At resolve-time, for non-deferred `$dynamic` entries, each named pattern is computed once per file and reused for that name to ensure consistency.
+   - At resolve-time, for non-deferred `$dynamic` entries, each named pattern is computed once per file and reused for 
+     that name to ensure consistency.
 
 ## Special operators ($...)
-Tooling should prefer and generate the concise mapping forms for all special operators. Long/verbose forms are allowed when specified but should be discouraged.
+Tooling should prefer and generate the concise mapping forms for all special operators. Long/verbose forms are allowed 
+when specified but should be discouraged.
 
 ### 1) `$dynamic` — dynamic value from named pattern
 - Preferred form (mapping value):
@@ -142,7 +151,8 @@ Tooling should prefer and generate the concise mapping forms for all special ope
 - Behavior:
   - Requires a top-level `dynamics` section with `patterns[patternName].template` (string) and optional `sets`.
   - When `when: resolve` (default): the template is expanded immediately at resolve time.
-  - When `when: request`: validation checks the template, and a deferred marker is stored; the actual value is produced later at request time.
+  - When `when: request`: validation checks the template, and a deferred marker is stored; the actual value is produced 
+    later at request time.
 - Errors:
   - Missing `dynamics` section when `$dynamic` is used.
   - Unknown `patternName`.
@@ -158,7 +168,8 @@ Tooling should prefer and generate the concise mapping forms for all special ope
   key: "prefix { $secrets: SECRET_KEY } suffix"
   ```
 - Behavior:
-  - Requires a secrets map provided externally (e.g., via `--secrets` file). If redact mode is on, resolved values are replaced by `***REDACTED***` in resolved output.
+  - Requires a secrets map provided externally (e.g., via `--secrets` file). If redact mode is on, resolved values are 
+    replaced by `***REDACTED***` in resolved output.
 - Errors:
   - Secrets map not provided when required.
   - `SECRET_KEY` not present in provided secrets map.
@@ -285,7 +296,8 @@ Notes:
 - Unknown placeholders are left as-is (no expansion) to avoid data loss.
 
 ## Compatibility
-- YAML anchors/aliases and merge keys (`<<`) are supported by the YAML loader and may appear anywhere. The model ignores unknown extra keys at the top level but forbids extras within typed sections.
+- YAML anchors/aliases and merge keys (`<<`) are supported by the YAML loader and may appear anywhere. The model ignores 
+  unknown extra keys at the top level but forbids extras within typed sections.
 
 ---
 

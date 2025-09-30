@@ -73,6 +73,7 @@ class DefaultsSection(BaseModel):
     FlowControl: FlowControlCfg
 
     # Optional Defaults
+    InsecureTLS: Optional[bool] = None
     Headers: Optional[Dict[str, Any]] = None
     Body: Optional[Dict[str, Any]] = None
     Query: Optional[Dict[str, Any]] = None
@@ -106,6 +107,7 @@ class Request(BaseModel):
     FlowControl: Optional[FlowControlCfg] = None
     RetryCfg: Optional[Retry] = Field(None, alias='Retry')
     Response: Optional[ResponseCfg] = None
+    InsecureTLS: Optional[bool] = None
 
 
 class RequestItem(BaseModel):
@@ -505,6 +507,9 @@ def build_resolved_config_dict(cfg: TopLevelConfig, secrets: Optional[Dict[str, 
                 d["Retry"] = defaults.RetryCfg.model_dump(by_alias=True, exclude_none=True)
         if defaults.Response is not None:
             d["Response"] = defaults.Response.model_dump(exclude_none=True)
+        # Include InsecureTLS only if provided; effective default is False when omitted
+        if _provided(defaults, 'InsecureTLS') and defaults.InsecureTLS is not None:
+            d["InsecureTLS"] = bool(defaults.InsecureTLS)
         if d:
             sc_out["Defaults"] = d
 
@@ -607,6 +612,14 @@ def build_resolved_config_dict(cfg: TopLevelConfig, secrets: Optional[Dict[str, 
                     fc_eff["TimeoutSeconds"] = req.FlowControl.TimeoutSeconds
             if fc_eff:
                 inner["FlowControl"] = fc_eff
+
+            # Effective InsecureTLS: default False; Defaults.InsecureTLS if provided; overridden by request-level if provided
+            insecure_eff = False
+            if defaults is not None and getattr(defaults, 'InsecureTLS', None) is not None:
+                insecure_eff = bool(defaults.InsecureTLS)
+            if getattr(req, 'InsecureTLS', None) is not None:
+                insecure_eff = bool(req.InsecureTLS)
+            inner["InsecureTLS"] = bool(insecure_eff)
 
             if retry_set:
                 if retry_value is None:

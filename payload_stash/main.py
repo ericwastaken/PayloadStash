@@ -342,6 +342,19 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool, secrets: Path | N
                     except Exception:
                         response_opts = None
 
+                    # Compute effective InsecureTLS (request-level overrides Defaults)
+                    insecure_defaults = False
+                    try:
+                        insecure_defaults = bool((defaults_resolved or {}).get("InsecureTLS") or False)
+                    except Exception:
+                        insecure_defaults = False
+                    insecure_eff = insecure_defaults
+                    try:
+                        if isinstance(r_val, dict) and "InsecureTLS" in r_val:
+                            insecure_eff = bool(r_val.get("InsecureTLS"))
+                    except Exception:
+                        pass
+
                     resolved_request_block = {
                         "Method": method,
                         "URLRoot": url_root,
@@ -350,6 +363,7 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool, secrets: Path | N
                         "Body": body_res,
                         "Query": query_res,
                         "TimeoutSeconds": timeout_s,
+                        "InsecureTLS": bool(insecure_eff),
                     }
                     if response_opts is not None:
                         resolved_request_block["Response"] = response_opts
@@ -407,6 +421,7 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool, secrets: Path | N
                             body=data_bytes,
                             timeout_s=timeout_s,
                             retry_cfg=effective_retry,
+                            insecure_tls=bool(resolved_request_block.get("InsecureTLS") or False),
                         )
                         if req_log:
                             for l in req_log.splitlines():
