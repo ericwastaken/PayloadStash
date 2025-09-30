@@ -26,7 +26,7 @@ def read_readme():
         p = ROOT / name
         if p.exists():
             return p.read_text(encoding="utf-8")
-    return "PayloadStash: a CLI skeleton."
+    return "PayloadStash: YAML‑driven HTTP fetch‑and‑stash for Python."
 
 
 class install(_install):
@@ -74,8 +74,8 @@ class install(_install):
 
 setup(
     name="payloadstash",
-    version="0.1.1",
-    description="PayloadStash CLI skeleton",
+    version="1.0.0",
+    description="PayloadStash: YAML‑driven HTTP fetch‑and‑stash for Python.",
     long_description=read_readme(),
     long_description_content_type="text/markdown",
     author="",
