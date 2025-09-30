@@ -75,6 +75,44 @@ while (( "$#" )); do
     continue
   fi
 
+  if [[ "$arg" == --secrets || "$arg" == --secrets=* ]]; then
+    # Ensure the provided secrets file path is rewritten to /app/config
+    if [[ "$arg" == --secrets=* ]]; then
+      secrets_val="${arg#--secrets=}"
+    else
+      if [[ $# -eq 0 ]]; then
+        echo "Error: --secrets provided without a value" >&2
+        exit 2
+      fi
+      secrets_val="$1"; shift || true
+    fi
+
+    # Rewrite secrets_val similar to config handling
+    if [[ "$secrets_val" == /* ]]; then
+      case "$secrets_val" in
+        "$CONFIG_HOST_DIR"/*)
+          rel="${secrets_val#"$CONFIG_HOST_DIR"/}"
+          rewritten+=("--secrets" "/app/config/$rel")
+          ;;
+        /app/config/*)
+          rewritten+=("--secrets" "$secrets_val")
+          ;;
+        *)
+          echo "Warning: absolute secrets path may not be accessible inside container: $secrets_val" >&2
+          rewritten+=("--secrets" "$secrets_val")
+          ;;
+      esac
+    else
+      if [[ -f "$CONFIG_HOST_DIR/$secrets_val" ]]; then
+        rewritten+=("--secrets" "/app/config/$secrets_val")
+      else
+        echo "Warning: expected secrets at ./config/$secrets_val not found; passing as-is" >&2
+        rewritten+=("--secrets" "$secrets_val")
+      fi
+    fi
+    continue
+  fi
+
   if [[ "$arg" == --* ]]; then
     # Pass through any other flag as-is
     rewritten+=("$arg")

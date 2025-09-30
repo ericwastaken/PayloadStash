@@ -3,9 +3,9 @@ set -euo pipefail
 
 # Package everything needed to run PayloadStash on an air-gapped server.
 # - Builds the docker image (payloadstash:local)
-# - Saves the image as ./packaged/payloadstash/payloadstash.tar
+# - Saves the image as ./packaged-docker/payloadstash/payloadstash.tar
 # - Copies helper scripts, compose.yml, and ./config into the package dir
-# - Creates ./packaged/payloadstash.zip with payloadstash/ as the root directory
+# - Creates ./packaged-docker/payloadstash.zip with payloadstash/ as the root directory
 #
 # Usage:
 #   ./x-docker-package-payloadstash.sh
@@ -18,11 +18,11 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$SCRIPT_DIR"
-PACKAGE_ROOT="$PROJECT_ROOT/packaged"
-PAYLOAD_DIR="$PACKAGE_ROOT/payloadstash"
+PACKAGE_ROOT="$PROJECT_ROOT/packaged-docker"
+PAYLOAD_DIR="$PACKAGE_ROOT/payloadstash-docker"
 IMAGE_TAG="payloadstash:local"
 TAR_NAME="payloadstash.tar"
-ZIP_NAME="payloadstash.zip"
+ZIP_NAME="payloadstash-docker.zip"
 
 # Check required tools
 if ! command -v docker >/dev/null 2>&1; then
@@ -50,7 +50,8 @@ else
   fi
 fi
 
-# 2) Prepare package directories
+# 2) Prepare package directories - clearing out any from before
+rm -rf "$PAYLOAD_DIR"
 mkdir -p "$PAYLOAD_DIR"
 
 # 3) Save the image to a tarball
@@ -63,12 +64,19 @@ echo "[package] Copying helper scripts, compose.yml, and config/ ..."
 cp -f "$PROJECT_ROOT/x-docker-run-payloadstash.sh" "$PAYLOAD_DIR/"
 cp -f "$PROJECT_ROOT/x-docker-load-payloadstash.sh" "$PAYLOAD_DIR/" || true
 cp -f "$PROJECT_ROOT/compose.yml" "$PAYLOAD_DIR/"
-# Copy config directory entirely
-rsync -a --delete "$PROJECT_ROOT/config/" "$PAYLOAD_DIR/config/" 2>/dev/null || {
-  # Fallback to cp -a if rsync isn't available
-  mkdir -p "$PAYLOAD_DIR/config"
-  cp -a "$PROJECT_ROOT/config/." "$PAYLOAD_DIR/config/"
-}
+## Copy config directory entirely
+#rsync -a --delete "$PROJECT_ROOT/config/" "$PAYLOAD_DIR/config/" 2>/dev/null || {
+#  # Fallback to cp -a if rsync isn't available
+#  mkdir -p "$PAYLOAD_DIR/config"
+#  cp -a "$PROJECT_ROOT/config/." "$PAYLOAD_DIR/config/"
+#}
+### Create the config dir, empty, with a README explaining what it's for
+mkdir -p "$PAYLOAD_DIR/config/"
+cp "$PROJECT_ROOT/config/README.md" "$PAYLOAD_DIR/config/README.md"
+cp "$PROJECT_ROOT/config/config-example.yml" "$PAYLOAD_DIR/config/config-example.yml"
+cp "$PROJECT_ROOT/config/secrets-example.env" "$PAYLOAD_DIR/config/secrets-example.env"
+cp "$PROJECT_ROOT/README.md" "$PAYLOAD_DIR/README.md"
+cp "$PROJECT_ROOT/LICENSE" "$PAYLOAD_DIR/LICENSE"
 
 # 5) Create the zip with payloadstash/ as root inside the archive
 echo "[package] Creating zip $PACKAGE_ROOT/$ZIP_NAME ..."
