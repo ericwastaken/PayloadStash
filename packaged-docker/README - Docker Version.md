@@ -46,7 +46,7 @@ If needed, make the helper scripts executable:
 ## Prerequisites on the target server
 - Docker Engine installed and running
 - Docker Compose (docker compose v2 preferred; docker-compose v1 also supported)
-- Sudo privileges to load images (docker load requires root)
+- Sudo privileges to load images (docker load requires root) and to run the helper scripts (the run script fixes output permissions)
 
 You can check availability with:
 - `docker --version`
@@ -80,19 +80,21 @@ All files (config, secrets, etc.) must be located in the `./config` directory!
 Common examples:
 
 - Validate a config:
-  - `./x-docker-run-payloadstash.sh validate config-example.yml`
-  - or `./x-docker-run-payloadstash.sh validate my-config.yml`
+  - `sudo ./x-docker-run-payloadstash.sh validate config-example.yml`
+  - or `sudo ./x-docker-run-payloadstash.sh validate my-config.yml`
 
 - Execute a run using a config:
-  - `./x-docker-run-payloadstash.sh run config-example.yml`
-  - or `./x-docker-run-payloadstash.sh run my-config.yml`
+  - `sudo ./x-docker-run-payloadstash.sh run config-example.yml`
+  - or `sudo ./x-docker-run-payloadstash.sh run my-config.yml`
 
-- Execute a run using a config and a secrets file:)
-    - `./x-docker-run-payloadstash.sh run config-example.yml --secrets secrets.env`
-    - or `./x-docker-run-payloadstash.sh run my-config.yml --secrets secrets.env`
+- Execute a run using a config and a secrets file:
+    - `sudo ./x-docker-run-payloadstash.sh run config-example.yml --secrets secrets.env`
+    - or `sudo ./x-docker-run-payloadstash.sh run my-config.yml --secrets secrets.env`
 
 
 Notes:
+- You must run the helper scripts with sudo. This is required so the run script can correct ownership of files written to ./output.
+- After the container completes, the run script will chown -R ./output back to the invoking non-root user (the sudo user).
 - The script mounts `./config` to `/app/config` and `./output` to `/app/output` in the container.
 - If you do not pass an `--out` flag, the script automatically sets `--out /app/output` so results appear under `./output` on the host.
 - If you pass a `--secrets` flag, the script automatically sets `--secrets /app/config/secrets.env` so the secrets file 

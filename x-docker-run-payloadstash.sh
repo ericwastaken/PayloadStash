@@ -4,9 +4,9 @@ set -euo pipefail
 # Helper to run PayloadStash inside Docker with ./config and ./output mounted.
 # This script does NOT build the image. Run ./x-docker-build-payloadstash.sh first.
 # Usage examples:
-#   ./x-docker-run-payloadstash.sh validate my-config.yml
-#   ./x-docker-run-payloadstash.sh run my-config.yml
-#   ./x-docker-run-payloadstash.sh run nested/other.yml --dry-run --yes
+#   sudo ./x-docker-run-payloadstash.sh validate my-config.yml
+#   sudo ./x-docker-run-payloadstash.sh run my-config.yml
+#   sudo ./x-docker-run-payloadstash.sh run nested/other.yml --dry-run --yes
 #
 # Notes:
 # - Config path is assumed to be relative to ./config when not absolute; it will be
@@ -22,6 +22,18 @@ OUTPUT_HOST_DIR="$PROJECT_ROOT/output"
 
 # Ensure expected host directories exist
 mkdir -p "$CONFIG_HOST_DIR" "$OUTPUT_HOST_DIR"
+
+# Require sudo so we can fix output directory permissions after the run
+if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
+  echo "Error: this script must be run with sudo so it can adjust ./output file ownership." >&2
+  echo "Re-run using: sudo $0 $*" >&2
+  exit 1
+fi
+
+# Determine the original invoking user's uid/gid for chown (fallback to root if unavailable)
+TARGET_UID="${SUDO_UID:-0}"
+TARGET_GID="${SUDO_GID:-0}"
+TARGET_USER="${SUDO_USER:-root}"
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "Error: docker is not installed or not in PATH" >&2
@@ -167,4 +179,15 @@ echo "[payloadstash-docker]   $CONFIG_HOST_DIR -> /app/config" >&2
 echo "[payloadstash-docker]   $OUTPUT_HOST_DIR -> /app/output" >&2
 
 # Execute via compose with the mounted volumes
-exec "${DOCKER_COMPOSE[@]}" -f "$PROJECT_ROOT/compose.yml" run --rm payloadstash "${rewritten[@]}"
+# Temporarily disable 'set -e' so we always run the post-run chown even if the container exits non-zero
+set +e
+"${DOCKER_COMPOSE[@]}" -f "$PROJECT_ROOT/compose.yml" run --rm payloadstash "${rewritten[@]}"
+run_status=$?
+set -e
+
+# After the run, fix ownership of the ./output directory back to the invoking user
+if [[ -d "$OUTPUT_HOST_DIR" ]]; then
+  chown -R "$TARGET_UID:$TARGET_GID" "$OUTPUT_HOST_DIR" || echo "Warning: failed to chown $OUTPUT_HOST_DIR to $TARGET_USER ($TARGET_UID:$TARGET_GID)" >&2
+fi
+
+exit $run_status
