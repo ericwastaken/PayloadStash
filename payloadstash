@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Wrapper script to run payloadstash from the project root using the local .venv.
+# - Ensures .venv exists (runs bootstrap.py if needed)
+# - Runs the CLI with all arguments passed through
+# - Forces working directory to the repo root so relative paths in args (e.g. data/*.yml) work
+
+set -euo pipefail
+
+# Resolve repository root (directory containing this script)
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Always run from the repo root so relative paths are stable
+cd "$DIR"
+
+# Ensure the venv and CLI are available
+if [[ ! -x "$DIR/.venv/bin/payloadstash" ]]; then
+  echo "[wrapper] Ensuring .venv and CLI are installed via bootstrap.py ..."
+  # bootstrap.py will create the venv and install the project
+  python3 "$DIR/bootstrap.py" >/dev/null
+fi
+
+# Exec the CLI inside the venv with all original arguments
+exec "$DIR/.venv/bin/payloadstash" "$@"

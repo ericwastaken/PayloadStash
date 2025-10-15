@@ -23,20 +23,29 @@ saved to disk with file extensions based on **Content‑Type**.
 
 ---
 
-## Quick Start - Native
+## Quick Start - Native (recommended for most users)
 
 ```bash
-# 1) Install (example) - note see DEVELOPER INSTALL below for dev setup!
-pip install .
+# 1) Install (venv will be created in ./.venv)
+# Regular install: (recommended for users)
+python3 bootstrap.py
+# Editable (dev) install: (recommended for developers)
+python3 bootstrap.py --editable
 
-# 2) Run a config
-payloadstash run path/to/config.yml --out ./out
+# 2) Run a config (you can run without activating the venv)
+./payloadstash run path/to/config.yml --out ./out
 
 # 3) Validate only (no requests)
-payloadstash validate path/to/config.yml
+./payloadstash validate path/to/config.yml
 
 # 4) Emit the fully-resolved config (after anchors & merges)
-payloadstash resolve path/to/config.yml --out ./out
+./payloadstash resolve path/to/config.yml --out ./out
+```
+
+If you prefer to manage venvs yourself:
+
+```bash
+python -m venv .venv && .venv/bin/python -m pip install -U pip && .venv/bin/pip install -e .
 ```
 
 ---
@@ -75,13 +84,17 @@ Notes:
 
 ## Quick Start - Developer Install
 
-If you are developing PayloadStash, you can install it in editable mode with this sequence of commands:
+If you are developing PayloadStash, the recommended editable install is via the bootstrap script:
 
-- Do once per environment: `python -m pip install -e .`
+- Editable install (creates .venv and installs -e): `python3 bootstrap.py --editable`
 - Reinstall only when:
     - dependencies change, or
     - entry point names change.
 - Otherwise, edit code and rerun the CLI `payloadstash`, no reinstall needed.
+
+If you prefer to manage venvs yourself:
+
+- Do once per environment: `python -m venv .venv && .venv/bin/python -m pip install -U pip && .venv/bin/pip install -e .`
 
 ---
 
