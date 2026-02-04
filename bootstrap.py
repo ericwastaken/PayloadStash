@@ -24,7 +24,7 @@ Examples:
 You can also run the CLI later without activating the venv:
     ./.venv/bin/payloadstash --help
 or on Windows PowerShell:
-    .\.venv\Scripts\payloadstash.exe --help
+    .\\.venv\\Scripts\\payloadstash.exe --help
 """
 import argparse
 import os
