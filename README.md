@@ -1,5 +1,7 @@
 # PayloadStash – README YAML Spec
 
+![PayloadStash Banner](./project-media/PayloadStash-Banner.png)
+
 YAML‑driven HTTP fetch‑and‑stash for Python. Define your run once, execute a sequence of REST calls, and write every 
 response to a clean, predictable folder structure—**with defaults, forced fields, anchors/aliases, concurrency, 
 resilient error handling, and run‑level reporting**.
