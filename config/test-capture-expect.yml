@@ -1,0 +1,43 @@
+StashConfig:
+  Name: CaptureExpectTest
+  Defaults:
+    URLRoot: https://httpbin.org
+    FlowControl:
+      DelaySeconds: 0
+      TimeoutSeconds: 15
+
+  Sequences:
+    - Name: BasicChecks
+      Type: Sequential
+      Requests:
+        - GetJson:
+            Method: GET
+            URLPath: /json
+            Expect:
+              - status: 200
+              - body.slideshow: { exists: true }
+              - body.slideshow.title: { type: string }
+              - body.slideshow.slides: { type: array }
+
+        - PostAnything:
+            Method: POST
+            URLPath: /anything
+            Body:
+              message: hello
+            Capture:
+              echoedMethod: body.method
+              origin: body.origin
+            Expect:
+              - status: 200
+              - body.method: { equals: POST }
+              - body.json.message: { equals: hello }
+
+        - ReplayCapture:
+            Method: POST
+            URLPath: /anything
+            Body:
+              seen_method: { $pattern: "${captured:echoedMethod}" }
+              seen_origin: { $pattern: "${captured:origin}" }
+            Expect:
+              - status: 200
+              - body.json.seen_method: { equals: POST }

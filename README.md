@@ -54,6 +54,43 @@ python -m venv .venv && .venv/bin/python -m pip install -U pip && .venv/bin/pip 
 
 ## Quick Start - Docker Execution
 
+### Using the pre-built image (no build step required)
+
+The image is published to GitHub Container Registry on every push to `main` and on version tags.
+
+**One-liner:**
+
+```bash
+docker run --rm --platform linux/amd64 \
+  -v "$(pwd)/config:/app/config" \
+  -v "$(pwd)/output:/app/output" \
+  ghcr.io/ericwastaken/payloadstash:main \
+  run config-example.yml --out /app/output
+```
+
+**Alias** — add to `~/.bashrc` or `~/.zshrc` for everyday use:
+
+```bash
+alias payloadstash='docker run --rm -it --pull always --platform linux/amd64 -v "$(pwd)/config:/app/config" -v "$(pwd)/output:/app/output" ghcr.io/ericwastaken/payloadstash:main'
+```
+
+After sourcing your shell profile, use it exactly like the native CLI:
+
+```bash
+payloadstash run config-example.yml --out /app/output
+payloadstash validate config-example.yml
+payloadstash run config-example.yml --out /app/output --secrets /app/config/my-secrets.env
+```
+
+Notes:
+- `./config` on the host is mounted to `/app/config` in the container — place config and secrets files there.
+- `./output` on the host is mounted to `/app/output` in the container — always pass `--out /app/output`.
+- Replace `:main` with a version tag (e.g., `:1.0.0`) to pin to a specific release.
+
+---
+
+### Building and running locally from source
+
 - Prerequisites: Docker and Docker Compose (v2 preferred).
 - Build the image (one-time or when sources change):
   `./x-docker-build-payloadstash.sh`
@@ -113,6 +150,7 @@ PayloadStash writes responses to a deterministic path with a **timestamped run f
       <original-config>-results.csv
       <original-config>-resolved.yml
       <original-config>-log.txt
+      <original-config>-report.md
 ```
 
 **Example**
@@ -130,6 +168,7 @@ out/
       PXXX-Tester-01-results.csv
       PXXX-Tester-01-resolved.yml
       PXXX-Tester-01-log.txt
+      PXXX-Tester-01-report.md
 ```
 
 ---
@@ -314,6 +353,19 @@ StashConfig:
             Response:
               PrettyPrint?: <bool>
               Sort?: <bool>
+            # Optional: extract values from response into captured dict
+            Capture?:
+              <captureKey>: <path>   # e.g., thingId: body.id
+            # Optional: assertions evaluated after response (all run; failure exits code 1)
+            Expect?:
+              - <path>: <matcher>    # e.g., status: 201  or  body.id: { exists: true }
+            # Optional: request-level dynamics (merged with top-level dynamics, request wins)
+            dynamics?:
+              patterns:
+                <patternName>:
+                  template: "<template string>"
+              sets?:
+                <setName>: [<string>, ...]
 ```
 
 ### Functions & Dynamics inside configs
@@ -748,6 +800,149 @@ Sequences:
 
 ---
 
+## Capture
+
+A `Capture` block on a request extracts values from the HTTP response into a run-level `captured` dictionary. Values stored here are available to all subsequent requests via `$pattern` templates using the `${captured:KEY}` placeholder.
+
+### Supported path prefixes
+
+| Path | Resolves to |
+|------|-------------|
+| `status` | HTTP status code (int) |
+| `duration_ms` | Request duration in milliseconds (int) |
+| `headers.<name>` | Response header value; `<name>` must be lowercase |
+| `body` | Entire parsed response body |
+| `body.<field>` | Dot-notation path into parsed JSON body |
+| `body[N].<field>` | Array index `N` into parsed JSON, then dot-notation field |
+
+### Example
+
+```yml
+Sequences:
+  - Name: CreateAndUse
+    Type: Sequential
+    Requests:
+      - CreateThing:
+          Method: POST
+          URLPath: /v1/things
+          Body:
+            name: "my-thing"
+          Capture:
+            thingId: body.id
+            elapsed: duration_ms
+            serverTime: headers.x-timestamp
+
+      - GetThing:
+          Method: GET
+          URLPath: /v1/things/placeholder
+          Body:
+            id: { $pattern: "${captured:thingId}" }
+```
+
+Notes:
+- `Capture` runs after the response is received and after `Expect` assertions are evaluated.
+- If a path does not resolve (field missing), the captured value is `null`.
+- Captured values are only accessible through `${captured:KEY}` inside `$pattern` templates.
+
+---
+
+## Expect
+
+An `Expect` list on a request defines assertions evaluated against the response after it is received. All assertions run (no short-circuit). If any fail, the run exits with code 1.
+
+### Matcher reference
+
+Each entry in the list is a single-key map `{ <path>: <matcher> }`. A primitive matcher value is shorthand for `{ equals: <value> }`.
+
+| Matcher | Description |
+|---------|-------------|
+| `equals` / `notEquals` | Deep equality |
+| `exists: bool` | `true` = not null/missing; `false` = null/missing |
+| `type: string` | JSON type: `string`, `number`, `integer`, `boolean`, `object`, `array`, `null` |
+| `matches` / `notMatches` | Regex applied to the stringified value |
+| `contains` / `notContains` | Substring in string, or element membership in array |
+| `in` / `notIn` | Value is/is not a member of a provided list |
+| `lengthEquals` / `lengthGte` / `lengthLte` | Length of array or string |
+| `gt` / `gte` / `lt` / `lte` | Numeric comparison |
+
+The same response path prefixes as `Capture` apply: `status`, `duration_ms`, `headers.<name>`, `body`, `body.<field>`, `body[N].<field>`.
+
+### Examples
+
+```yml
+- CreateThing:
+    Method: POST
+    URLPath: /v1/things
+    Body:
+      name: "my-thing"
+    Capture:
+      thingId: body.id
+    Expect:
+      # Shorthand for { equals: 201 }
+      - status: 201
+      # Exists check
+      - body.id: { exists: true }
+      # Type check
+      - body.name: { type: string }
+      # Array membership
+      - body.tags: { contains: "active" }
+      # Performance guard
+      - duration_ms: { lte: 2000 }
+      # Regex
+      - body.id: { matches: "^[a-f0-9-]{36}$" }
+      # Reference a previously captured value
+      - body.id: { equals: { $pattern: "${captured:thingId}" } }
+```
+
+---
+
+## $pattern Operator
+
+`$pattern` is a special operator for inline, request-time templates. Unlike `$dynamic` (which requires a named pattern defined in the top-level `dynamics` section), `$pattern` lets you write a one-off template directly on the field. It always defers to request time — no `when` field is needed.
+
+### Form
+
+```yaml
+key: { $pattern: "template string" }
+```
+
+### Template placeholders
+
+All the same placeholders as `dynamics.patterns.template` are supported, plus `${captured:KEY}`:
+
+| Placeholder | Description |
+|-------------|-------------|
+| `${hex:N}` | N random hex characters (uppercase A–F) |
+| `${alphanumeric:N}` | N random characters 0-9 A-Z a-z |
+| `${numeric:N}` | N random digits 0-9 |
+| `${alpha:N}` | N random letters A-Z a-z |
+| `${uuidv4}` | UUID v4 string |
+| `${choice:setName}` | Random element from `dynamics.sets[setName]` |
+| `${timestamp[:format]}` | UTC timestamp; formats: `iso_8601` (default), `epoch_ms`, `epoch_s` |
+| `${secrets:KEY}` | Secret value from the secrets file |
+| `${captured:KEY}` | Value stored by a `Capture` block on an earlier request |
+
+`${captured:KEY}` is only valid inside `$pattern` templates. The template syntax is validated at config-load time; expansion happens at request time so runtime values (including captured values) are available.
+
+### Examples
+
+```yml
+Body:
+  traceId: { $pattern: "${hex:16}" }
+  parentId: { $pattern: "${captured:thingId}" }
+  env: { $pattern: "${choice:envs}" }
+  requestId: { $pattern: "req-${uuidv4}" }
+```
+
+Using `$pattern` in `Expect` matcher values:
+
+```yml
+Expect:
+  - body.id: { equals: { $pattern: "${captured:thingId}" } }
+```
+
+---
+
 ## Output Files & Extensions
 
 ### Response formatting controls (Defaults or per request)
@@ -816,15 +1011,17 @@ for every request executed.
 * `status` – HTTP status code (or -1 if none).
 * `duration_ms` – request time in ms.
 * `attempts` – number of attempts made.
+* `expect_passed` – number of `Expect` assertions that passed (0 if no `Expect` block).
+* `expect_failed` – number of `Expect` assertions that failed (0 if no `Expect` block).
 
 **Example:**
 
 ```csv
-sequence,request,timestamp,status,duration_ms,attempts
-seq001-GetGeneralData,req001-GetConfig,2025-09-17T15:42:11Z,200,123,1
-seq001-GetGeneralData,req002-GetCatalog,2025-09-17T15:42:11Z,500,87,1
-seq002-GetPlayer01,req001-GetState,2025-09-17T15:42:12Z,200,212,1
-seq002-GetPlayer01,req002-GrantItem,2025-09-17T15:42:13Z,200,145,1
+sequence,request,timestamp,status,duration_ms,attempts,expect_passed,expect_failed
+seq001-GetGeneralData,req001-GetConfig,2025-09-17T15:42:11Z,200,123,1,3,0
+seq001-GetGeneralData,req002-GetCatalog,2025-09-17T15:42:11Z,500,87,1,0,1
+seq002-GetPlayer01,req001-GetState,2025-09-17T15:42:12Z,200,212,1,0,0
+seq002-GetPlayer01,req002-GrantItem,2025-09-17T15:42:13Z,200,145,1,2,0
 ```
 
 ---
@@ -854,6 +1051,29 @@ out/PXXX-Tester-01/2025-09-17T15-42-10Z/PXXX-Tester-01-log.txt
 
 ---
 
+## Run Report
+
+Every `payloadstash run` produces a `<original-config>-report.md` file alongside the other run artifacts. This markdown report provides a human-readable summary of the run with per-request results, assertion outcomes, and captured values.
+
+**File path:**
+
+```
+<out>/<StashConfig.Name>/<RunTimestamp>/<original-config>-report.md
+```
+
+**Example:**
+
+```
+out/PXXX-Tester-01/2025-09-17T15-42-10Z/PXXX-Tester-01-report.md
+```
+
+**Contents include:**
+- Per-request result table: sequence, request key, HTTP status, duration, attempts, assertions passed/failed
+- Assertions detail: each `Expect` assertion with its path, matcher, actual value, and pass/fail outcome
+- Captured values: all keys and values stored in the run-level `captured` dict at the end of the run
+
+---
+
 ## CLI Usage
 
 ```bash
@@ -870,8 +1090,8 @@ Flags:
 
 Exit codes:
 
-* 0 = run success, no validation errors and all requests were considered successful.
-* 1 = run success, but at least one http request was not successful.
+* 0 = run success, no validation errors, all requests were considered successful, and all `Expect` assertions passed.
+* 1 = run completed, but at least one `Expect` assertion failed OR at least one HTTP request was not successful.
 * 9 = run not successful due to a validation error, or output write error. Output might be partial.
 
 > **Note:** Individual request errors will not cause a premature exit.

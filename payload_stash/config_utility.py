@@ -31,7 +31,7 @@ _HEX_CHARS = "0123456789ABCDEF"
 _PLACEHOLDER_RE = re.compile(r"\$\{([^}:]+)(?::([^}:]+))?(?::([^}]+))?\}")
 
 
-def dynamic_expand(template: str, sets: Optional[Dict[str, List[str]]] = None, *, secrets: Optional[Dict[str, str]] = None, redact_secrets: bool = False) -> str:
+def dynamic_expand(template: str, sets: Optional[Dict[str, List[str]]] = None, *, secrets: Optional[Dict[str, str]] = None, redact_secrets: bool = False, captures: Optional[Dict[str, Any]] = None) -> str:
     """
     Expand a dynamic template string using supported placeholders.
 
@@ -100,6 +100,13 @@ def dynamic_expand(template: str, sets: Optional[Dict[str, List[str]]] = None, *
             n = int(arg1)
             chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
             return "".join(random.choice(chars) for _ in range(n))
+        if name == "captured":
+            key = arg1
+            if not key:
+                return m.group(0)
+            if captures and key in captures:
+                return str(captures[key])
+            return m.group(0)  # not yet available — leave as-is
         # Unknown placeholder: leave as-is to avoid data loss
         return m.group(0)
 
@@ -124,12 +131,13 @@ def dynamic_expand(template: str, sets: Optional[Dict[str, List[str]]] = None, *
     return out
 
 
-def resolve_deferred(value: Any, *, secrets: Optional[Dict[str, str]] = None, redact_secrets: bool = False) -> Any:
+def resolve_deferred(value: Any, *, secrets: Optional[Dict[str, str]] = None, redact_secrets: bool = False, captures: Optional[Dict[str, Any]] = None) -> Any:
     """Recursively resolve any "$deferred" function or dynamic objects.
 
     Supported deferred marker shapes:
       {"$deferred": {"func": "timestamp", "format": "iso_8601"}}
       {"$deferred": {"dynamic": {"template": "...", "sets": {...}}}}
+      {"$deferred": {"pattern": {"template": "...", "sets": {...}}}}
     """
     if isinstance(value, Mapping):
         if "$deferred" in value:
@@ -146,14 +154,162 @@ def resolve_deferred(value: Any, *, secrets: Optional[Dict[str, str]] = None, re
                 sets = dyn.get("sets") or {}
                 if not isinstance(template, str):
                     return value
-                return dynamic_expand(template, sets, secrets=secrets, redact_secrets=redact_secrets)
+                return dynamic_expand(template, sets, secrets=secrets, redact_secrets=redact_secrets, captures=captures)
+            pat = payload.get("pattern")
+            if isinstance(pat, Mapping):
+                template = pat.get("template")
+                sets = pat.get("sets") or {}
+                if not isinstance(template, str):
+                    return value
+                return dynamic_expand(template, sets, secrets=secrets, redact_secrets=redact_secrets, captures=captures)
             # Unknown deferred payload: return as-is
             return value
         # else recurse into mapping
-        return {k: resolve_deferred(v, secrets=secrets, redact_secrets=redact_secrets) for k, v in value.items()}
+        return {k: resolve_deferred(v, secrets=secrets, redact_secrets=redact_secrets, captures=captures) for k, v in value.items()}
     if isinstance(value, list):
-        return [resolve_deferred(v, secrets=secrets, redact_secrets=redact_secrets) for v in value]
+        return [resolve_deferred(v, secrets=secrets, redact_secrets=redact_secrets, captures=captures) for v in value]
     return value
+
+
+import json as _json_module
+
+_PATH_ARRAY_RE = re.compile(r'^\[(\d+)\](.*)', re.DOTALL)
+_PATH_DOT_RE = re.compile(r'^\.([^\.\[]+)(.*)', re.DOTALL)
+
+
+def _navigate_path(obj: Any, path_rest: str) -> Any:
+    """Traverse a parsed object using dot/bracket notation remainder."""
+    if not path_rest:
+        return obj
+    arr = _PATH_ARRAY_RE.match(path_rest)
+    if arr:
+        idx, rest = int(arr.group(1)), arr.group(2)
+        if isinstance(obj, list) and 0 <= idx < len(obj):
+            return _navigate_path(obj[idx], rest)
+        return None
+    dot = _PATH_DOT_RE.match(path_rest)
+    if dot:
+        key, rest = dot.group(1), dot.group(2)
+        if isinstance(obj, dict) and key in obj:
+            return _navigate_path(obj[key], rest)
+        return None
+    return None
+
+
+def resolve_response_path(path: str, status: int, headers: Dict[str, str], body_text: str, duration_ms: int) -> Any:
+    """Resolve a path string (status, headers.x, body.x.y, duration_ms) against a response."""
+    if path == "status":
+        return status
+    if path == "duration_ms":
+        return duration_ms
+    if path.startswith("headers."):
+        return headers.get(path[len("headers."):].lower())
+    if path == "body":
+        try:
+            return _json_module.loads(body_text)
+        except Exception:
+            return body_text
+    if path.startswith("body"):
+        rest = path[len("body"):]
+        if not rest:
+            try:
+                return _json_module.loads(body_text)
+            except Exception:
+                return body_text
+        try:
+            return _navigate_path(_json_module.loads(body_text), rest)
+        except Exception:
+            return None
+    return None
+
+
+
+def _apply_matcher(matcher_key: str, actual: Any, expected: Any) -> Tuple[bool, str]:
+    """Apply one matcher. Returns (passed, failure_detail_or_empty_string)."""
+    if matcher_key == "equals":
+        passed = actual == expected
+        return passed, f"    actual: {actual!r}" if not passed else ""
+    if matcher_key == "notEquals":
+        passed = actual != expected
+        return passed, f"    actual: {actual!r}" if not passed else ""
+    if matcher_key == "exists":
+        passed = (actual is not None) if expected else (actual is None)
+        return passed, f"    actual: {actual!r}" if not passed else ""
+    if matcher_key == "matches":
+        try:
+            passed = bool(re.search(str(expected), str(actual)))
+        except Exception:
+            passed = False
+        return passed, f"    actual: {actual!r}" if not passed else ""
+    if matcher_key == "notMatches":
+        try:
+            passed = not bool(re.search(str(expected), str(actual)))
+        except Exception:
+            passed = False
+        return passed, f"    actual: {actual!r}" if not passed else ""
+    if matcher_key == "contains":
+        if isinstance(actual, list):
+            passed = expected in actual
+        elif actual is not None:
+            passed = str(expected) in str(actual)
+        else:
+            passed = False
+        return passed, f"    actual: {actual!r}" if not passed else ""
+    if matcher_key == "notContains":
+        if isinstance(actual, list):
+            passed = expected not in actual
+        elif actual is not None:
+            passed = str(expected) not in str(actual)
+        else:
+            passed = True
+        return passed, f"    actual: {actual!r}" if not passed else ""
+    if matcher_key == "type":
+        type_map: Dict[str, Any] = {
+            "string": str, "number": (int, float), "integer": int,
+            "boolean": bool, "object": dict, "array": list, "null": type(None),
+        }
+        exp_type = type_map.get(str(expected))
+        if exp_type is None:
+            return False, f"    unknown type: {expected!r}"
+        if expected in ("integer", "number") and isinstance(actual, bool):
+            return False, "    actual type: bool"
+        passed = isinstance(actual, exp_type)
+        return passed, f"    actual type: {type(actual).__name__}" if not passed else ""
+    if matcher_key in ("gt", "gte", "lt", "lte"):
+        try:
+            a, e = float(actual), float(expected)
+            ops = {"gt": a > e, "gte": a >= e, "lt": a < e, "lte": a <= e}
+            passed = ops[matcher_key]
+        except Exception:
+            passed = False
+        return passed, f"    actual: {actual!r}" if not passed else ""
+    return False, f"    unknown matcher: {matcher_key!r}"
+
+
+def evaluate_expect(
+    expect_list: List[Dict[str, Any]],
+    status: int,
+    headers: Dict[str, str],
+    body_text: str,
+    duration_ms: int,
+) -> List[Tuple[str, bool, str]]:
+    """
+    Evaluate Expect assertions against a response.
+    Returns list of (label, passed, failure_detail).
+    """
+    results: List[Tuple[str, bool, str]] = []
+    for item in expect_list:
+        if not isinstance(item, dict) or len(item) != 1:
+            continue
+        path, matcher_spec = next(iter(item.items()))
+        actual = resolve_response_path(str(path), status, headers, body_text, duration_ms)
+        if not isinstance(matcher_spec, dict):
+            matcher_spec = {"equals": matcher_spec}
+        for mk, mv in matcher_spec.items():
+            passed, detail = _apply_matcher(str(mk), actual, mv)
+            label = f"{path} {mk} {mv!r}"
+            results.append((label, passed, detail))
+    return results
 
 
 def load_secrets_file(path: str | Path) -> Dict[str, str]:

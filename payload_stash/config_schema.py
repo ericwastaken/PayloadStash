@@ -108,6 +108,9 @@ class Request(BaseModel):
     RetryCfg: Optional[Retry] = Field(None, alias='Retry')
     Response: Optional[ResponseCfg] = None
     InsecureTLS: Optional[bool] = None
+    Capture: Optional[Dict[str, str]] = None
+    Expect: Optional[List[Dict[str, Any]]] = None
+    dynamics: Optional[Dynamics] = None
 
 
 class RequestItem(BaseModel):
@@ -424,6 +427,19 @@ def _resolve_values(value: Any, dyn: Optional[Dynamics], secrets: Optional[Dict[
         # Check if it's a dynamic object
         if "$dynamic" in value:
             return _resolve_dynamic_obj(value, dyn, secrets, redact_secrets, resolved_cache)
+        # $pattern — inline template, always request-time. Validate the template now
+        # so errors surface at config-load time, but defer expansion to request time
+        # so that ${captured:KEY} and other runtime values are available.
+        if "$pattern" in value:
+            template = value["$pattern"]
+            if not isinstance(template, str):
+                raise ValueError("$pattern value must be a string template")
+            sets = dyn.sets if dyn else {}
+            try:
+                cfgutil.dynamic_expand(template, sets or {}, secrets=secrets, redact_secrets=True)
+            except Exception as e:
+                raise e
+            return {"$deferred": {"pattern": {"template": template, "sets": dict(sets or {})}}}
         # Else resolve each entry
         return {k: _resolve_values(v, dyn, secrets, redact_secrets, resolved_cache) for k, v in value.items()}
     if isinstance(value, list):
@@ -545,6 +561,22 @@ def build_resolved_config_dict(cfg: TopLevelConfig, secrets: Optional[Dict[str, 
         for item in seq.Requests:
             req = item.value
 
+            # If this request defines its own dynamics, merge them with the top-level dynamics.
+            # Request-level patterns override top-level patterns of the same name; sets are merged.
+            # This allows one-off generators without polluting the top-level dynamics section.
+            req_dyn = req.dynamics
+            if req_dyn is not None:
+                merged_patterns = {**(dyn.patterns if dyn else {}), **req_dyn.patterns}
+                merged_sets = {**(dyn.sets or {} if dyn else {}), **(req_dyn.sets or {})}
+                eff_dyn = Dynamics(patterns=merged_patterns, sets=merged_sets or None)
+                # Build a resolve-time cache that starts from the top-level cache and adds local patterns
+                eff_cache: Optional[Dict[str, Any]] = dict(resolved_dyn_cache or {})
+                for name, pat in req_dyn.patterns.items():
+                    eff_cache[name] = cfgutil.dynamic_expand(pat.template, merged_sets, secrets=secrets, redact_secrets=redact_secrets)
+            else:
+                eff_dyn = dyn
+                eff_cache = resolved_dyn_cache
+
             # base sections per rules
             headers = _copy_map(req.Headers) if req.Headers is not None else _copy_map(defaults.Headers) if (defaults and defaults.Headers is not None) else None
             body = _copy_map(req.Body) if req.Body is not None else _copy_map(defaults.Body) if (defaults and defaults.Body is not None) else None
@@ -562,9 +594,9 @@ def build_resolved_config_dict(cfg: TopLevelConfig, secrets: Optional[Dict[str, 
                 query.update(forced.Query)
 
             # resolve any function-call or dynamic objects after merges
-            headers = _resolve_values(headers, dyn, secrets, redact_secrets, resolved_dyn_cache) if headers is not None else None
-            body = _resolve_values(body, dyn, secrets, redact_secrets, resolved_dyn_cache) if body is not None else None
-            query = _resolve_values(query, dyn, secrets, redact_secrets, resolved_dyn_cache) if query is not None else None
+            headers = _resolve_values(headers, eff_dyn, secrets, redact_secrets, eff_cache) if headers is not None else None
+            body = _resolve_values(body, eff_dyn, secrets, redact_secrets, eff_cache) if body is not None else None
+            query = _resolve_values(query, eff_dyn, secrets, redact_secrets, eff_cache) if query is not None else None
 
             # resolve retry precedence with explicit-null awareness
             retry_set = False
@@ -626,6 +658,11 @@ def build_resolved_config_dict(cfg: TopLevelConfig, secrets: Optional[Dict[str, 
                     inner["Retry"] = None
                 else:
                     inner["Retry"] = retry_value.model_dump(by_alias=True, exclude_none=True)
+
+            if req.Capture is not None:
+                inner["Capture"] = req.Capture
+            if req.Expect is not None:
+                inner["Expect"] = _resolve_values(req.Expect, eff_dyn, secrets, redact_secrets, eff_cache)
 
             resolved_requests.append(req_out)
 
