@@ -108,7 +108,7 @@ class Request(BaseModel):
     RetryCfg: Optional[Retry] = Field(None, alias='Retry')
     Response: Optional[ResponseCfg] = None
     InsecureTLS: Optional[bool] = None
-    Capture: Optional[Dict[str, str]] = None
+    Capture: Optional[Dict[str, Any]] = None
     Expect: Optional[List[Dict[str, Any]]] = None
     dynamics: Optional[Dynamics] = None
 

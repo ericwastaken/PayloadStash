@@ -4,3 +4,4 @@ pydantic>=2.0.0
 urllib3>=2.0.0
 backoff>=2.2.1
 rich>=13.0.0
+jsonpath-ng>=1.6.0

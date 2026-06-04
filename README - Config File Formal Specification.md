@@ -44,7 +44,7 @@ StashConfig (mapping, extra keys forbidden)
 - For `Sequence.Type`:
   - If `Type == "Concurrent"`: `ConcurrencyLimit` is required and must be int>=1.
   - If `Type == "Sequential"`: `ConcurrencyLimit` must not be present.
-- `Capture` path strings must use one of the supported prefixes: `status`, `duration_ms`, `headers.<name>`, `body`, `body.<field>`, `body[N].<field>`. Invalid prefixes are rejected at config-load time.
+- `Capture` values may be a plain path string using one of the supported prefixes (`status`, `duration_ms`, `headers.<name>`, `body`, `body.<field>`, `body[N].<field>`) or a `$jsonpath` operator map.
 - `$pattern` requires a non-empty string template value. Template syntax (placeholder forms) is validated at config-load time.
 
 ## Section types
@@ -121,11 +121,11 @@ null is preserved and overrides lower-precedence Retry.
 A `Capture` block on a Request extracts values from the HTTP response and stores them in the run-level `captured` dict. Captured values persist for the lifetime of the run and are accessible to all subsequent requests via `$pattern` templates using the `${captured:KEY}` placeholder.
 
 Schema:
-- `Capture`: map<string, string>
+- `Capture`: map<string, string | $jsonpath-operator>
   - Key: capture variable name (string, non-empty)
-  - Value: response path string (see supported prefixes below)
+  - Value: response path string (see supported prefixes below) OR a `$jsonpath` operator map
 
-Supported path prefixes:
+Supported path prefixes (plain string form):
 - `status` → HTTP status code (int)
 - `duration_ms` → request duration in milliseconds (int)
 - `headers.<name>` → response header value; `<name>` must be lowercase
@@ -133,17 +133,27 @@ Supported path prefixes:
 - `body.<field>` → dot-notation path into parsed JSON body
 - `body[N].<field>` → array index `N` into parsed JSON body, then dot-notation field
 
+`$jsonpath` operator form:
+- `{ $jsonpath: '<expression>' }` — evaluates a JSONPath expression against the parsed response body (`$` = body root)
+- Supports filter predicates, wildcards, recursive descent, and all standard JSONPath syntax
+- Append `::suffix` to the expression for aggregation: `::first`, `::last`, `::count`, `::sum`, `::avg`, `::max`, `::min`
+- Without a suffix: single match → scalar; multiple matches → list
+
 Example:
 ```yaml
 Capture:
-  thingId: body.id
-  elapsed: duration_ms
-  serverTime: headers.x-timestamp
+  thingId:      body.id
+  elapsed:      duration_ms
+  serverTime:   headers.x-timestamp
+  matchById:    { $jsonpath: '$.items[?(@.id=="DYX")].value' }
+  allIds:       { $jsonpath: '$.items[*].id' }
+  totalScore:   { $jsonpath: '$.players[*].score::sum' }
+  playerCount:  { $jsonpath: '$.players[*]::count' }
 ```
 
 Notes:
 - Capture runs after the response is received and after `Expect` assertions are evaluated.
-- If a path does not resolve (e.g., field missing), the captured value is `null`.
+- If a path does not resolve (e.g., field missing or no JSONPath matches), the captured value is `null`.
 - Captured values are available only in `$pattern` templates via `${captured:KEY}`.
 
 ## Expect
@@ -153,7 +163,7 @@ An `Expect` list on a Request defines assertions evaluated against the response.
 Schema:
 - `Expect`: list<map<string, matcher>>
   - Each item in the list is a single-key map: `{ <path>: <matcher> }`
-  - `path`: response path string — same resolution prefixes as `Capture` (`status`, `duration_ms`, `headers.<name>`, `body`, `body.<field>`, `body[N].<field>`)
+  - `path`: response path string — same resolution prefixes as `Capture` (`status`, `duration_ms`, `headers.<name>`, `body`, `body.<field>`, `body[N].<field>`); `$jsonpath` operator not supported here
   - `matcher`: a primitive value (shorthand for `equals`) OR a map of matcher key → value
 
 Matcher reference:

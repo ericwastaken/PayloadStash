@@ -172,6 +172,7 @@ def resolve_deferred(value: Any, *, secrets: Optional[Dict[str, str]] = None, re
 
 
 import json as _json_module
+import jsonpath_ng.ext as _jsonpath_ext
 
 _PATH_ARRAY_RE = re.compile(r'^\[(\d+)\](.*)', re.DOTALL)
 _PATH_DOT_RE = re.compile(r'^\.([^\.\[]+)(.*)', re.DOTALL)
@@ -196,8 +197,37 @@ def _navigate_path(obj: Any, path_rest: str) -> Any:
     return None
 
 
-def resolve_response_path(path: str, status: int, headers: Dict[str, str], body_text: str, duration_ms: int) -> Any:
-    """Resolve a path string (status, headers.x, body.x.y, duration_ms) against a response."""
+def resolve_response_path(path: Any, status: int, headers: Dict[str, str], body_text: str, duration_ms: int) -> Any:
+    """Resolve a path string or $jsonpath operator against a response."""
+    if isinstance(path, dict) and "$jsonpath" in path:
+        try:
+            raw = path["$jsonpath"]
+            aggregation = None
+            if "::" in raw:
+                raw, aggregation = raw.rsplit("::", 1)
+            expr = _jsonpath_ext.parse(raw)
+            matches = [m.value for m in expr.find(_json_module.loads(body_text))]
+            if not matches:
+                return None
+            if aggregation:
+                nums = [v for v in matches if isinstance(v, (int, float))]
+                if aggregation == "first":
+                    return matches[0]
+                if aggregation == "last":
+                    return matches[-1]
+                if aggregation == "count":
+                    return len(matches)
+                if aggregation == "sum":
+                    return sum(nums)
+                if aggregation == "avg":
+                    return sum(nums) / len(nums) if nums else None
+                if aggregation == "max":
+                    return max(nums) if nums else None
+                if aggregation == "min":
+                    return min(nums) if nums else None
+            return matches[0] if len(matches) == 1 else matches
+        except Exception:
+            return None
     if path == "status":
         return status
     if path == "duration_ms":
