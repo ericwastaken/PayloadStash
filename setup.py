@@ -74,7 +74,7 @@ class install(_install):
 
 setup(
     name="payloadstash",
-    version="1.0.0",
+    version="1.0.2",
     description="PayloadStash: YAML‑driven HTTP fetch‑and‑stash for Python.",
     long_description=read_readme(),
     long_description_content_type="text/markdown",
