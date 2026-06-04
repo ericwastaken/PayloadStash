@@ -62,29 +62,27 @@ The image is published to GitHub Container Registry on every push to `main` and 
 
 ```bash
 docker run --rm --platform linux/amd64 \
-  -v "$(pwd)/config:/app/config" \
-  -v "$(pwd)/output:/app/output" \
+  -v "$(pwd):/working" -w /working \
   ghcr.io/ericwastaken/payloadstash:main \
-  run config-example.yml --out /app/output
+  run ./config/config-example.yml --out ./output
 ```
 
 **Alias** — add to `~/.bashrc` or `~/.zshrc` for everyday use:
 
 ```bash
-alias payloadstash='docker run --rm -it --pull always --platform linux/amd64 -v "$(pwd)/config:/app/config" -v "$(pwd)/output:/app/output" ghcr.io/ericwastaken/payloadstash:main'
+alias payloadstash='docker run --rm -it --pull always --platform linux/amd64 -v "$(pwd):/working" -w /working ghcr.io/ericwastaken/payloadstash:main'
 ```
 
 After sourcing your shell profile, use it exactly like the native CLI:
 
 ```bash
-payloadstash run config-example.yml --out /app/output
-payloadstash validate config-example.yml
-payloadstash run config-example.yml --out /app/output --secrets /app/config/my-secrets.env
+payloadstash run ./config/config-example.yml --out ./output
+payloadstash validate ./config/config-example.yml
+payloadstash run ./config/config-example.yml --out ./output --secrets ./config/my-secrets.env
 ```
 
 Notes:
-- `./config` on the host is mounted to `/app/config` in the container — place config and secrets files there.
-- `./output` on the host is mounted to `/app/output` in the container — always pass `--out /app/output`.
+- Your current working directory is mounted to `/working` inside the container — paths work just like the native CLI.
 - Replace `:main` with a version tag (e.g., `:1.0.0`) to pin to a specific release.
 
 ---
@@ -815,6 +813,36 @@ A `Capture` block on a request extracts values from the HTTP response into a run
 | `body.<field>` | Dot-notation path into parsed JSON body |
 | `body[N].<field>` | Array index `N` into parsed JSON, then dot-notation field |
 
+### `$jsonpath` operator
+
+For complex extractions — filter predicates, wildcards, multi-match — use the `$jsonpath` operator in place of a plain path string. The JSONPath `$` root refers to the parsed response body.
+
+```yml
+Capture:
+  thingId:      body.id                                                   # simple path (unchanged)
+  matchedValue: { $jsonpath: '$.items[?(@.id=="DYX")].value' }           # filter by field value
+  allIds:       { $jsonpath: '$.items[*].id' }                            # wildcard → list
+  totalScore:   { $jsonpath: '$.players[*].score::sum' }                  # aggregation
+  playerCount:  { $jsonpath: '$.players[*]::count' }
+  topScore:     { $jsonpath: '$.players[*].score::max' }
+  firstItem:    { $jsonpath: '$.items[*].id::first' }
+  lastItem:     { $jsonpath: '$.items[*].id::last' }
+```
+
+**Aggregation suffixes** — append `::suffix` to the JSONPath expression:
+
+| Suffix | Behaviour |
+|--------|-----------|
+| `::first` | First match |
+| `::last` | Last match |
+| `::count` | Number of matches |
+| `::sum` | Sum of numeric matches |
+| `::avg` | Average of numeric matches |
+| `::max` | Maximum of numeric matches |
+| `::min` | Minimum of numeric matches |
+
+Without a suffix: a single match returns a scalar; multiple matches return a list.
+
 ### Example
 
 ```yml
@@ -865,7 +893,7 @@ Each entry in the list is a single-key map `{ <path>: <matcher> }`. A primitive 
 | `lengthEquals` / `lengthGte` / `lengthLte` | Length of array or string |
 | `gt` / `gte` / `lt` / `lte` | Numeric comparison |
 
-The same response path prefixes as `Capture` apply: `status`, `duration_ms`, `headers.<name>`, `body`, `body.<field>`, `body[N].<field>`.
+The same response path prefixes as `Capture` apply: `status`, `duration_ms`, `headers.<name>`, `body`, `body.<field>`, `body[N].<field>`. The `$jsonpath` operator is not supported in `Expect` paths.
 
 ### Examples
 

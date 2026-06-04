@@ -41,3 +41,57 @@ StashConfig:
             Expect:
               - status: 200
               - body.json.seen_method: { equals: POST }
+
+    - Name: JsonPathCapture
+      Type: Sequential
+      Requests:
+        - GetSlides:
+            Method: GET
+            URLPath: /json
+            Capture:
+              slideCount:  { $jsonpath: '$.slideshow.slides[*]::count' }
+              slideTitles: { $jsonpath: '$.slideshow.slides[*].title' }
+              firstTitle:  { $jsonpath: '$.slideshow.slides[*].title::first' }
+              lastTitle:   { $jsonpath: '$.slideshow.slides[*].title::last' }
+            Expect:
+              - status: 200
+
+        - VerifySlides:
+            Method: POST
+            URLPath: /anything
+            Body:
+              count:       { $pattern: "${captured:slideCount}" }
+              all_titles:  { $pattern: "${captured:slideTitles}" }
+              first_title: { $pattern: "${captured:firstTitle}" }
+            Expect:
+              - status: 200
+              - body.json.first_title: { equals: { $pattern: "${captured:firstTitle}" } }
+
+    - Name: JsonPathFilterById
+      Type: Sequential
+      Requests:
+        - PostItems:
+            Method: POST
+            URLPath: /anything
+            Body:
+              items:
+                - id: alpha
+                  score: 10
+                - id: beta
+                  score: 20
+                - id: gamma
+                  score: 30
+            Capture:
+              betaScore: { $jsonpath: '$.json.items[?(@.id=="beta")].score' }
+            Expect:
+              - status: 200
+              - body.json.items: { type: array }
+
+        - VerifyFilteredCapture:
+            Method: POST
+            URLPath: /anything
+            Body:
+              captured_score: { $pattern: "${captured:betaScore}" }
+            Expect:
+              - status: 200
+              - body.json.captured_score: { equals: { $pattern: "${captured:betaScore}" } }

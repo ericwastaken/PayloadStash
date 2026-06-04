@@ -76,6 +76,29 @@ StashConfig:
               - 3
               - 5
               - 10
+    - Name: JsonPathCaptureSeq      # Demonstrates $jsonpath capture operator
+      Type: Sequential
+      Requests:
+        - GetMultipleObjects:
+            Method: GET
+            URLPath: /objects
+            Query:
+              id: [3, 5, 10]
+            Capture:
+              firstObjectId:  { $jsonpath: '$[*].id::first' }          # first id as scalar
+              allObjectNames: { $jsonpath: '$[*].name' }               # all names as list
+              objectCount:    { $jsonpath: '$[*]::count' }             # total count
+            Expect:
+              - status: 200
+              - body: { type: array }
+
+        - GetFirstObject:           # Fetch the first object and verify its id matches what we captured
+            Method: GET
+            URLPath: /objects/3
+            Expect:
+              - status: 200
+              - body.id: { equals: { $pattern: '${captured:firstObjectId}' } }
+
     - Name: ConcurrentSeq          # Name of the sequence
       Type: Concurrent             # Requests run concurrently
       ConcurrencyLimit: 4
