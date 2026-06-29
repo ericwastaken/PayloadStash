@@ -893,7 +893,7 @@ Each entry in the list is a single-key map `{ <path>: <matcher> }`. A primitive 
 | `lengthEquals` / `lengthGte` / `lengthLte` | Length of array or string |
 | `gt` / `gte` / `lt` / `lte` | Numeric comparison |
 
-The same response path prefixes as `Capture` apply: `status`, `duration_ms`, `headers.<name>`, `body`, `body.<field>`, `body[N].<field>`. The `$jsonpath` operator is not supported in `Expect` paths.
+The same response path prefixes as `Capture` apply: `status`, `duration_ms`, `headers.<name>`, `body`, `body.<field>`, `body[N].<field>`. A path beginning with `$` is evaluated as a JSONPath expression — the same resolver `Capture` uses — supporting filter predicates, wildcards, and the `::count` / `::sum` / `::avg` / `::min` / `::max` / `::first` / `::last` aggregation suffixes.
 
 ### Examples
 
@@ -920,6 +920,13 @@ The same response path prefixes as `Capture` apply: `status`, `duration_ms`, `he
       - body.id: { matches: "^[a-f0-9-]{36}$" }
       # Reference a previously captured value
       - body.id: { equals: { $pattern: "${captured:thingId}" } }
+      # JSONPath path — filter an array by field, then assert on the match
+      - $.tags[?(@.kind=="role")].name: { equals: "admin" }
+      # JSONPath with an aggregation suffix
+      - $.items[*].score::sum: { equals: 50 }
+      # Membership and length matchers
+      - body.status: { in: ["active", "pending"] }
+      - $.items[*].id: { lengthEquals: 2 }
 ```
 
 ---

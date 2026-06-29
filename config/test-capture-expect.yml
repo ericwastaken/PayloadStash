@@ -95,3 +95,20 @@ StashConfig:
             Expect:
               - status: 200
               - body.json.captured_score: { equals: { $pattern: "${captured:betaScore}" } }
+
+    - Name: JsonPathExpect
+      Type: Sequential
+      Requests:
+        - PostItems:
+            Method: POST
+            URLPath: /anything
+            Body:
+              items:
+                - { id: beta, score: 20 }
+                - { id: gamma, score: 30 }
+            Expect:
+              - status: 200
+              - '$.json.items[?(@.id=="beta")].score': { equals: 20 }
+              - '$.json.items[*].id': { lengthEquals: 2 }
+              - '$.json.items[*].score::sum': { equals: 50 }
+              - body.method: { in: ["POST", "PUT"] }

@@ -163,7 +163,7 @@ An `Expect` list on a Request defines assertions evaluated against the response.
 Schema:
 - `Expect`: list<map<string, matcher>>
   - Each item in the list is a single-key map: `{ <path>: <matcher> }`
-  - `path`: response path string — same resolution prefixes as `Capture` (`status`, `duration_ms`, `headers.<name>`, `body`, `body.<field>`, `body[N].<field>`); `$jsonpath` operator not supported here
+  - `path`: response path string — same resolution prefixes as `Capture` (`status`, `duration_ms`, `headers.<name>`, `body`, `body.<field>`, `body[N].<field>`). A path beginning with `$` is evaluated as a JSONPath expression (filter predicates, wildcards, and `::count`/`::sum`/`::avg`/`::min`/`::max`/`::first`/`::last` aggregation suffixes), the same resolver `Capture` uses.
   - `matcher`: a primitive value (shorthand for `equals`) OR a map of matcher key → value
 
 Matcher reference:
