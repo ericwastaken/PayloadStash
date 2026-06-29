@@ -313,6 +313,24 @@ def _apply_matcher(matcher_key: str, actual: Any, expected: Any) -> Tuple[bool, 
         except Exception:
             passed = False
         return passed, f"    actual: {actual!r}" if not passed else ""
+    if matcher_key in ("in", "notIn"):
+        try:
+            is_member = actual in expected
+        except TypeError:
+            is_member = False
+        passed = is_member if matcher_key == "in" else (not is_member)
+        return passed, f"    actual: {actual!r}" if not passed else ""
+    if matcher_key in ("lengthEquals", "lengthGte", "lengthLte"):
+        try:
+            n = len(actual)
+            e = int(expected)
+            ops = {"lengthEquals": n == e, "lengthGte": n >= e, "lengthLte": n <= e}
+            passed = ops[matcher_key]
+            detail = f"    actual length: {n}"
+        except Exception:
+            passed = False
+            detail = f"    actual has no length: {actual!r}"
+        return passed, detail if not passed else ""
     return False, f"    unknown matcher: {matcher_key!r}"
 
 
@@ -332,7 +350,12 @@ def evaluate_expect(
         if not isinstance(item, dict) or len(item) != 1:
             continue
         path, matcher_spec = next(iter(item.items()))
-        actual = resolve_response_path(str(path), status, headers, body_text, duration_ms)
+        # A path key beginning with "$" is a JSONPath expression — route it
+        # through the same resolver Capture uses (filters + ::aggregation).
+        if isinstance(path, str) and path.startswith("$"):
+            actual = resolve_response_path({"$jsonpath": path}, status, headers, body_text, duration_ms)
+        else:
+            actual = resolve_response_path(str(path), status, headers, body_text, duration_ms)
         if not isinstance(matcher_spec, dict):
             matcher_spec = {"equals": matcher_spec}
         for mk, mv in matcher_spec.items():
