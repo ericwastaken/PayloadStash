@@ -1,0 +1,48 @@
+# WaitFor integration test: RPC then subscribe, chained by a captured value.
+# Requires responder.py running (RPC echo + signal->fanout rebroadcast).
+StashConfig:
+  Name: AmqpWaitForTest                   # AMQP-only
+
+  Defaults:
+    FlowControl:
+      DelaySeconds: 0
+      TimeoutSeconds: 8
+    AMQP:
+      URI: "{ $secrets: RMQ_URI }"
+
+  Sequences:
+    - Name: RpcThenSubscribe
+      Type: Sequential
+      Requests:
+
+        - resolve-band:                    # RPC: publish to rpc.resolve, await correlated reply
+            Transport: amqp
+            AMQP:
+              Exchange: ""
+              RoutingKey: rpc.resolve
+              WaitFor: { Mode: rpc, TimeoutSeconds: 5 }
+            Body: { bandId: "04AABBCC" }
+            Capture:
+              playFabId: { $jsonpath: "$.result.PlayFabId" }   # from the reply body
+            Expect:
+              - status: reply
+              - "$.result.PlayFabId": { type: string }
+
+        - signal-and-await-broadcast:      # subscribe: publish a signal, await the state_update broadcast
+            Transport: amqp
+            AMQP:
+              Exchange: frontline.exchange
+              RoutingKey: device.signal.coin
+              WaitFor:
+                Mode: subscribe
+                Exchange: state.fanout     # bind a temp queue here BEFORE publishing the trigger
+                RoutingKey: ""
+                TimeoutSeconds: 5
+                Match:
+                  - "$.event": { equals: state_update }
+            Body:
+              playFabId: { $pattern: "${captured:playFabId}" }   # captured from the RPC reply
+              action: coin_grant
+            Expect:
+              - status: matched
+              - "$.playFabId": { equals: { $pattern: "${captured:playFabId}" } }   # round-tripped

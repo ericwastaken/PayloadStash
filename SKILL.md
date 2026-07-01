@@ -6,7 +6,7 @@ Use this skill when asked to create, edit, or extend a PayloadStash YAML config 
 
 ## What PayloadStash Does
 
-PayloadStash reads a YAML config, executes HTTP requests (sequentially or concurrently), writes each response to disk, and optionally asserts on response values. Every run produces a resolved config, a run log, a results CSV, and a markdown report.
+PayloadStash reads a YAML config, executes HTTP requests **and/or AMQP (RabbitMQ) publishes** (sequentially or concurrently), writes each response to disk, and optionally asserts on the result. HTTP and AMQP requests can be mixed freely in the same config, and captured values flow across both. Every run produces a resolved config, a run log, a results CSV, and a markdown report.
 
 ---
 
@@ -111,6 +111,9 @@ Sequences:
 **Retry precedence:**
 - `request.Retry` (even if `Null`) beats `Defaults.Retry`.
 - Only falls through to Defaults when the request omits `Retry` entirely.
+
+**Transport:**
+- Requests default to HTTP. To publish an AMQP message instead, set `Transport: amqp` on the request and give it an `AMQP` block (no `Method`/`URLPath`). HTTP and AMQP requests can be mixed in one sequence. See **AMQP (sending messages)** below.
 
 ---
 
@@ -380,6 +383,22 @@ Assert on response values. All assertions run — no short-circuit on first fail
 
 Shorthand: a primitive value (`status: 200`) is sugar for `{ equals: 200 }`.
 
+### JSONPath in the assertion path
+
+The key (left side) of an assertion is a response path. Besides the simple prefixes above (`status`, `duration_ms`, `headers.<name>`, `body`, `body.<field>`, `body[N].<field>`), **a key beginning with `$` is evaluated as a JSONPath expression** against the parsed body — the same resolver `Capture` uses, including filter predicates, wildcards, and `::` aggregation suffixes. Quote the key so YAML treats it as a string.
+
+```yaml
+Expect:
+  - "$.items[?(@.id=='DYX')].value": { equals: 42 }    # filter predicate → scalar
+  - "$.players[*].score::sum": { gt: 100 }              # aggregate, then compare
+  - "$.items[*]::count": { equals: 3 }                  # count of matches
+  - "$.items[*].id": { contains: "abc" }                # wildcard → list, membership
+  - "$.items[*].id": { lengthGte: 1 }                   # wildcard → list, length
+  - "$.user.email": { matches: "@example\\.com$" }
+```
+
+Without an aggregation suffix a single JSONPath match yields a scalar and multiple matches yield a list — pick matchers accordingly (`contains`/`lengthEquals` for lists; `equals`/`type` for scalars). JSONPath keys apply to the parsed JSON response body — HTTP responses, and AMQP `WaitFor` reply/matched bodies (`Mode: rpc`/`subscribe`). A plain AMQP publish has no body, so assert on `status`/`headers.*`/`duration_ms` there.
+
 **Expect with captured values:**
 
 ```yaml
@@ -390,6 +409,169 @@ Shorthand: a primitive value (`status: 200`) is sugar for `{ equals: 200 }`.
       - status: 200
       - body.id: { equals: { $pattern: "${captured:thingId}" } }
 ```
+
+---
+
+## AMQP (sending messages)
+
+Set `Transport: amqp` on a request to publish a message to RabbitMQ instead of making an HTTP call. Everything else you know still applies: `Body` is the message payload, `Defaults`/`Forced` merge, `dynamics`, `$secrets`, `$pattern`, `${captured:KEY}`, `Capture`, and `Expect` all work the same way. HTTP and AMQP requests can be freely mixed in one config.
+
+```yaml
+Defaults:
+  URLRoot: https://api.example.com        # only needed if the config also has HTTP requests
+  FlowControl: { DelaySeconds: 0, TimeoutSeconds: 10 }   # TimeoutSeconds is reused as the confirm deadline
+  AMQP:
+    URI: "{ $secrets: RMQ_URI }"          # broker connection, e.g. amqp://user:pass@host:5672/%2F
+    Confirm: true                          # publisher confirms by default
+
+Sequences:
+  - Name: publish
+    Type: Sequential
+    Requests:
+      - emit-coin:
+          Transport: amqp                  # <-- selects the AMQP transport (default is http)
+          AMQP:
+            Exchange: frontline.exchange
+            RoutingKey: device.signal.coin
+            Properties:
+              DeliveryMode: persistent      # transient | persistent
+              CorrelationId: { $pattern: "${uuidv4}" }
+              Headers: { x-source: payloadstash }   # AMQP message (application) headers
+          Body:
+            bandId: { $pattern: "${hex:16}" }
+            action: coin_grant
+          Expect:
+            - status: ack                   # AMQP status is a string, not a number
+```
+
+### The `AMQP` block
+
+| Field | Meaning |
+|---|---|
+| `URI` | Broker connection string (`amqp://…` or `amqps://…`). Usually set in `Defaults.AMQP`. Supports `{ $secrets: KEY }`. |
+| `Exchange` | Exchange to publish to. `""` = the default (nameless) exchange. |
+| `RoutingKey` | Routing key. For the default exchange this is the queue name; for topic/direct it's matched against bindings; for fanout it's ignored. |
+| `Confirm` | `true` = wait for a publisher confirm (broker ack). |
+| `Mandatory` | `true` = fail if the message can't be routed to any queue. |
+| `TLS` | TLS settings for `amqps://` — see below. |
+| `Properties` | AMQP message properties (see below). |
+
+At least one of `Exchange` or `RoutingKey` must be non-empty. Exchange type is broker-side: for a **fanout** exchange set only `Exchange` (routing key is ignored); to publish straight to a **queue** use `Exchange: ""` with `RoutingKey: <queue-name>`.
+
+**`Properties`** (all optional): `ContentType`, `ContentEncoding`, `DeliveryMode` (`transient`|`persistent`), `Priority` (0–9), `CorrelationId`, `ReplyTo`, `Expiration`, `MessageId`, `Type`, `AppId`, and `Headers` (a map of AMQP application headers). A JSON `ContentType` is applied automatically when a `Body` is present and none is given.
+
+### Result status (a string, not a number)
+
+An AMQP publish reports a **string** `status` you assert on with `Expect`:
+
+| `status` | When |
+|---|---|
+| `ack` | `Confirm: true` and the broker acknowledged |
+| `nack` | `Confirm: true` and the broker rejected |
+| `unroutable` | `Mandatory: true` and no queue was bound to route it |
+| `published` | fire-and-forget (no `Confirm`), handed to the broker |
+| `reply` | `WaitFor: { Mode: rpc }` — a correlated reply arrived (reply body available) |
+| `matched` | `WaitFor: { Mode: subscribe }` — a message satisfying `Match` arrived (body available) |
+| `timeout` | `WaitFor` deadline elapsed with no reply/match |
+
+It also synthesizes response headers you can capture/assert on: `x-amqp-exchange`, `x-amqp-routing-key`, `x-amqp-confirmed`, `x-amqp-routed`.
+
+```yaml
+Expect:
+  - status: ack
+  - headers.x-amqp-routing-key: { equals: device.signal.coin }
+  - duration_ms: { lt: 2000 }
+```
+
+### TLS / `amqps` with CA certificates
+
+For a TLS broker use an `amqps://` URI; for a private CA add an `AMQP.TLS` block:
+
+```yaml
+Defaults:
+  AMQP:
+    URI: "{ $secrets: RMQ_URI }"          # amqps://user:pass@broker:5671/%2F
+    TLS:
+      CAFile: /etc/ssl/rabbit-ca.pem       # CA cert(s) that signed the broker cert
+      # CAPath: /etc/ssl/certs             # or a directory of CA certs
+      # CertFile: /etc/ssl/client.pem      # client cert for mutual TLS (optional)
+      # KeyFile:  /etc/ssl/client.key      # client key for mutual TLS (optional)
+      VerifyPeer: true                     # default true; verify broker cert + hostname
+      # ServerName: rabbit.internal        # override the hostname verified via SNI
+```
+
+- TLS is applied only for `amqps://` URIs.
+- `CAFile`/`CAPath` replace the default trust store — point `CAFile` at a bundle if you also need the system CAs.
+- `VerifyPeer: false` disables certificate and hostname checking (test only).
+
+### Awaiting a response: RPC and WaitFor
+
+Add a `WaitFor` block to **publish, then wait for a response message** — one operation, with a timeout. Two modes:
+
+**`Mode: rpc`** — await a correlated reply on an auto-generated reply queue (PayloadStash sets `reply_to` + `correlation_id` on your message). The reply body becomes the response body, so `Capture`/`Expect`/`$jsonpath` work on it. Status is `reply` or `timeout`.
+
+```yaml
+- resolve-band:
+    Transport: amqp
+    AMQP:
+      Exchange: ""
+      RoutingKey: rpc.resolve
+      WaitFor: { Mode: rpc, TimeoutSeconds: 5 }   # TimeoutSeconds optional (defaults to FlowControl)
+    Body: { bandId: "04AABBCC" }
+    Capture:
+      playFabId: { $jsonpath: "$.result.PlayFabId" }   # captured from the reply
+    Expect:
+      - status: reply
+      - "$.result.PlayFabId": { type: string }
+```
+
+**`Mode: subscribe`** — bind a temporary queue to an exchange *before* publishing, then publish a trigger and wait for a message satisfying `Match`. Use this to assert on a **downstream broadcast/side-effect** (e.g. a fanout state update) that isn't a direct reply. Status is `matched` or `timeout`.
+
+```yaml
+- signal-and-await-broadcast:
+    Transport: amqp
+    AMQP:
+      Exchange: frontline.exchange          # where the trigger goes
+      RoutingKey: device.signal.coin
+      WaitFor:
+        Mode: subscribe
+        Exchange: state.fanout              # temp queue is bound here, BEFORE publishing
+        RoutingKey: ""                       # binding key (ignored by fanout)
+        TimeoutSeconds: 5
+        Match:                               # Expect-style list; the awaited message must satisfy ALL
+          - "$.event": { equals: state_update }
+          - "$.playFabId": { equals: { $pattern: "${captured:playFabId}" } }
+    Body: { playFabId: { $pattern: "${captured:playFabId}" }, action: coin_grant }
+    Expect:
+      - status: matched
+```
+
+Notes:
+- `Match` uses the same matchers as `Expect`, evaluated against each received message's body (`$.`/`body.*`) and headers (`headers.*`, including `headers.x-amqp-routing-key`). The first message satisfying all conditions wins; others are discarded (`headers.x-amqp-nonmatching-count` reports how many were skipped).
+- For `subscribe` the listener is established *before* the trigger is published, so a fast broadcast can't be missed.
+- `rpc` forbids `Exchange`/`RoutingKey`/`Match` under `WaitFor`; `subscribe` requires `Exchange` + `Match`.
+- The reply/matched message's body feeds `Capture`, so `${captured:KEY}` can carry it into later requests.
+
+### Fanout broadcast + mixed HTTP/AMQP
+
+```yaml
+Sequences:
+  - Name: signal-then-verify
+    Type: Sequential
+    Requests:
+      - broadcast:                          # fanout: routing key omitted (ignored anyway)
+          Transport: amqp
+          AMQP: { Exchange: state.fanout }
+          Body: { type: ping }
+          Expect: [ { status: ack } ]
+
+      - verify-http:                        # HTTP request in the same sequence
+          Method: GET
+          URLPath: /health
+          Expect: [ { status: 200 } ]
+```
+
+**`Defaults`/`Forced` for AMQP:** the `AMQP` block merges like `Headers` (request over Defaults, Forced last; `Properties.Headers` is deep-merged). HTTP-only sections (`URLRoot`, `Headers`, `Query`, `InsecureTLS`, `Response`) do not apply to AMQP requests; `Body`, `Retry`, and `FlowControl` are shared. `URLRoot` is required only when the config contains an HTTP request. `Retry` on an AMQP request retries connection/network errors only — a `nack`/`unroutable` is a broker decision, not retried.
 
 ---
 
@@ -609,10 +791,108 @@ payloadstash run config.yml --out ./output --secrets secrets.env
 
 ---
 
+## Full Working Example — AMQP
+
+A realistic AMQP config: broker URI + TLS/CA from secrets, an anchor for shared message properties, a dynamic band id, publisher confirms, a topic publish, a fanout broadcast, a concurrent burst, and an HTTP health check in the same run (transports mix freely).
+
+```yaml
+# Reusable AMQP message properties
+common_props: &common_props
+  DeliveryMode: persistent
+  Headers:
+    x-source: payloadstash
+
+dynamics:
+  patterns:
+    bandId:
+      template: "04${hex:14}"                   # NFC band id, fresh per request
+
+StashConfig:
+  Name: SnwDeviceSignals
+
+  Defaults:
+    URLRoot: https://api.snw.example.com        # only used by the HTTP verify step
+    FlowControl:
+      DelaySeconds: 0
+      TimeoutSeconds: 10                         # doubles as the publish/confirm deadline
+    AMQP:
+      URI: "{ $secrets: RMQ_URI }"              # amqps://user:pass@gam02:5671/%2F
+      Confirm: true                              # ack/nack on every publish
+      Exchange: frontline.exchange               # default target exchange for these publishes
+      TLS:
+        CAFile: /etc/ssl/certs/rabbit-ca.pem     # broker CA bundle (amqps)
+        VerifyPeer: true
+
+  Forced:
+    AMQP:
+      Properties:
+        Headers:
+          x-run: smoke                           # tags every message; deep-merged with per-request headers
+
+  Sequences:
+
+    - Name: EmitSignals
+      Type: Sequential
+      Requests:
+
+        - emit-coin:                             # topic publish, confirmed
+            Transport: amqp
+            AMQP:
+              RoutingKey: device.signal.coin
+              Properties:
+                <<: *common_props
+                CorrelationId: { $pattern: "${uuidv4}" }
+            Body:
+              bandId: { $dynamic: bandId, when: request }
+              action: coin_grant
+              ts: { $timestamp: { format: epoch_ms, when: request } }
+            Expect:
+              - status: ack
+              - headers.x-amqp-routing-key: { equals: device.signal.coin }
+
+        - broadcast-refresh:                     # fanout: routing key omitted (ignored)
+            Transport: amqp
+            AMQP: { Exchange: state.fanout }
+            Body: { type: refresh }
+            Expect:
+              - status: ack
+
+    - Name: BurstBananas                         # publish several messages concurrently
+      Type: Concurrent
+      ConcurrencyLimit: 4
+      Requests:
+        - b1: { Transport: amqp, AMQP: { RoutingKey: device.signal.banana }, Body: { action: banana_grant } }
+        - b2: { Transport: amqp, AMQP: { RoutingKey: device.signal.banana }, Body: { action: banana_grant } }
+        - b3: { Transport: amqp, AMQP: { RoutingKey: device.signal.banana }, Body: { action: banana_grant } }
+
+    - Name: VerifyOverHttp                       # an HTTP request in the same run
+      Type: Sequential
+      Requests:
+        - health:
+            Method: GET
+            URLPath: /health
+            Expect:
+              - status: 200
+```
+
+**Secrets file** (`secrets.env`):
+
+```
+RMQ_URI=amqps://guest:guest@gam02.park.internal:5671/%2F
+```
+
+Run it:
+
+```bash
+payloadstash run amqp-signals.yml --out ./output --secrets secrets.env
+```
+
+---
+
 ## Validation Rules (errors to avoid)
 
 - `StashConfig.Name` must be non-empty.
-- `Defaults.URLRoot` must be non-empty (no trailing slash).
+- `Defaults.URLRoot` must be non-empty (no trailing slash) when the config has HTTP requests; it may be omitted for AMQP-only configs.
 - `Defaults.FlowControl` with both `DelaySeconds` and `TimeoutSeconds` is required.
 - `Sequence.Name` values must be unique across all sequences.
 - Request keys must be unique within each sequence.
@@ -622,6 +902,8 @@ payloadstash run config.yml --out ./output --secrets secrets.env
 - `${captured:KEY}` is only valid inside a `$pattern` template — not in plain strings.
 - `$secrets` requires a matching key in the `--secrets` file.
 - Do not write `$deferred` directly — it is an internal marker.
+- `Transport: amqp` requires an `AMQP` block; HTTP-only keys (`Method`, `URLPath`, `Query`, `URLRoot`, `InsecureTLS`, `Response`, `Headers`) are not allowed on an AMQP request, and an `AMQP` block is not allowed on an HTTP request.
+- Every AMQP request needs a resolvable broker URI (`AMQP.URI` on the request or in `Defaults.AMQP`) and at least one of `AMQP.Exchange` / `AMQP.RoutingKey` non-empty.
 
 ---
 
@@ -678,7 +960,7 @@ payloadstash run config.yml --out ./output --yes      # skip confirmation prompt
 **Run artifacts** (written to `<out>/<Name>/<timestamp>/`):
 - `<config>-resolved.yml` — effective config after Defaults/Forced merge
 - `<config>-run.log` — full request/response log with assertion results
-- `<config>-results.csv` — one row per request: sequence, request, timestamp, status, duration_ms, attempts, expect_passed, expect_failed
+- `<config>-results.csv` — one row per request: sequence, request, timestamp, status, duration_ms, attempts, expect_passed, expect_failed (status is the HTTP code for HTTP requests, or a label like `ack`/`nack` for AMQP)
 - `<config>-report.md` — markdown report with assertions summary table and per-request details
 - `seq<NNN>-<Name>/req<NNN>-<Key>-response.<ext>` — raw response body per request
 

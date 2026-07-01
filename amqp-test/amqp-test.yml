@@ -1,0 +1,65 @@
+# PayloadStash AMQP integration test config — publishes to the local docker broker.
+# Routing keys / exchanges match the topology declared by declare.py.
+common_props: &common_props
+  DeliveryMode: persistent
+  Headers:
+    x-source: payloadstash
+
+dynamics:
+  patterns:
+    bandId:
+      template: "04${hex:14}"          # NFC band id, fresh per request
+
+StashConfig:
+  Name: AmqpIntegrationTest            # AMQP-only config — no URLRoot needed
+
+  Defaults:
+    FlowControl:
+      DelaySeconds: 0
+      TimeoutSeconds: 10               # publish/confirm deadline
+    AMQP:
+      URI: "{ $secrets: RMQ_URI }"     # amqp://guest:guest@localhost:5672/%2F
+      Confirm: true                     # every publish waits for a broker ack
+      Exchange: frontline.exchange      # default exchange for these publishes
+
+  Forced:
+    AMQP:
+      Properties:
+        Headers:
+          x-run: integration-test       # tags every message; deep-merged with per-request headers
+
+  Sequences:
+
+    - Name: EmitSignals
+      Type: Sequential
+      Requests:
+
+        - emit-coin:                     # topic publish -> test.coin
+            Transport: amqp
+            AMQP:
+              RoutingKey: device.signal.coin
+              Properties:
+                <<: *common_props
+                CorrelationId: { $pattern: "${uuidv4}" }
+            Body:
+              bandId: { $dynamic: bandId, when: request }
+              action: coin_grant
+              ts: { $timestamp: { format: epoch_ms, when: request } }
+            Expect:
+              - status: ack
+              - headers.x-amqp-routing-key: { equals: device.signal.coin }
+
+        - broadcast-refresh:             # fanout -> test.state
+            Transport: amqp
+            AMQP: { Exchange: state.fanout }
+            Body: { type: refresh }
+            Expect:
+              - status: ack
+
+    - Name: BurstBananas                 # concurrent publishes -> test.banana (x3)
+      Type: Concurrent
+      ConcurrencyLimit: 3
+      Requests:
+        - b1: { Transport: amqp, AMQP: { RoutingKey: device.signal.banana }, Body: { action: banana_grant, n: 1 } }
+        - b2: { Transport: amqp, AMQP: { RoutingKey: device.signal.banana }, Body: { action: banana_grant, n: 2 } }
+        - b3: { Transport: amqp, AMQP: { RoutingKey: device.signal.banana }, Body: { action: banana_grant, n: 3 } }
