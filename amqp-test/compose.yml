@@ -1,0 +1,16 @@
+# Local RabbitMQ broker for exercising PayloadStash AMQP configs.
+# Usage: docker compose up -d --wait   (then ./run-test.sh)
+services:
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: payloadstash-rmq
+    ports:
+      - "5672:5672"     # AMQP
+      - "15672:15672"   # Management UI (http://localhost:15672 — guest/guest)
+    volumes:
+      - ./rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 12

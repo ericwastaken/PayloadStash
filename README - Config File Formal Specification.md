@@ -1,7 +1,7 @@
 # README - Config File Formal Specification
 
-- Version: 1.1  
-- Last updated: 2026-05-13
+- Version: 1.2  
+- Last updated: 2026-07-01
 
 ## Scope
 - This document formally defines the PayloadStash YAML configuration syntax and resolution rules so that an IDE or LLM 
@@ -10,6 +10,7 @@
 
 ## High‑level overview
 - A config file is a YAML mapping with the required key `StashConfig` and an optional key `dynamics`.
+- Each request selects a transport via the `Transport` discriminator: `http` (default) or `amqp`. HTTP requests make an HTTP call; AMQP requests publish a message to a RabbitMQ broker. Both may be mixed within a config and share the same resolution, `Capture`, and `Expect` machinery.
 - All other top-level keys are allowed (e.g., YAML anchors) and ignored by the parser, but are not part of the formal model.
 - Short mapping forms for special `$` operators are preferred and should be encouraged by tooling.
   - Example (preferred): `artifactId: { $dynamic: artifactid }`
@@ -36,7 +37,7 @@ StashConfig (mapping, extra keys forbidden)
 - `Sequences`: list<Sequence> (required, non-empty)
 
 ## Validation rules
-- `StashConfig.Defaults.URLRoot`: non-empty string, required.
+- `StashConfig.Defaults.URLRoot`: non-empty string, required **only when the config contains at least one HTTP request**; may be omitted for AMQP-only configs.
 - `StashConfig.Defaults.FlowControl`: required and must include `DelaySeconds` (int>=0) and `TimeoutSeconds` (int>=0). 
   Values validated individually; presence required.
 - `Sequence.Name` values must be unique across the config.
@@ -46,25 +47,29 @@ StashConfig (mapping, extra keys forbidden)
   - If `Type == "Sequential"`: `ConcurrencyLimit` must not be present.
 - `Capture` values may be a plain path string using one of the supported prefixes (`status`, `duration_ms`, `headers.<name>`, `body`, `body.<field>`, `body[N].<field>`) or a `$jsonpath` operator map.
 - `$pattern` requires a non-empty string template value. Template syntax (placeholder forms) is validated at config-load time.
+- Every request with `Transport: amqp` must resolve a broker URI (`AMQP.URI` on the request or `Defaults.AMQP.URI`) and must set at least one of `AMQP.Exchange` / `AMQP.RoutingKey` to a non-empty value (both empty routes nowhere).
+- HTTP-only keys (`Method`, `URLPath`, `Headers`, `Query`, `URLRoot`, `InsecureTLS`, `Response`) are forbidden on an AMQP request; the `AMQP` block is forbidden on an HTTP request (enforced by the discriminated union with extra keys forbidden).
 
 ## Section types
 
 ### DefaultsSection (mapping, extra keys forbidden)
-- `URLRoot`: string (required, non-empty)
+- `URLRoot`: string (optional; required only when the config contains an HTTP request; non-empty when present)
 - `FlowControl`: FlowControlCfg (required)
 - `InsecureTLS`: bool (optional; default false). When true, TLS certificate verification and hostname checks are 
-  disabled for requests (similar to curl --insecure).
-- `Headers`: map<string, any> (optional)
+  disabled for HTTP requests (similar to curl --insecure).
+- `Headers`: map<string, any> (optional; HTTP requests only)
 - `Body`: map<string, any> (optional)
-- `Query`: map<string, any> (optional)
+- `Query`: map<string, any> (optional; HTTP requests only)
 - `Retry`: Retry (optional) [internal alias `RetryCfg`]
-- `Response`: ResponseCfg (optional)
+- `Response`: ResponseCfg (optional; HTTP requests only)
+- `AMQP`: AmqpSection (optional) — connection-level AMQP defaults (URI/Exchange/Confirm/TLS/Properties…) merged into AMQP requests.
 
 ### ForcedSection (mapping, extra keys forbidden)
 - `Headers`: map<string, any> (optional)
 - `Body`: map<string, any> (optional)
 - `Query`: map<string, any> (optional)
 - `Retry`: Retry (optional) [internal alias `RetryCfg`]
+- `AMQP`: AmqpSection (optional) — overlaid last onto AMQP requests (`Properties.Headers` deep-merged).
 
 ### FlowControlCfg (mapping, extra keys forbidden)
 - `DelaySeconds`: int>=0 (optional depending on context; required in `Defaults.FlowControl`)
@@ -97,7 +102,11 @@ null is preserved and overrides lower-precedence Retry.
 - Form: `{ <RequestKey>: Request }`
 - `<RequestKey>`: string, unique within the sequence
 
-### Request (mapping, extra keys forbidden)
+### Request (discriminated union on `Transport`; extra keys forbidden)
+A request is one of two variants, selected by the `Transport` field. When `Transport` is omitted it defaults to `http`, so existing HTTP configs are unchanged.
+
+#### HttpRequest (`Transport: http`, the default)
+- `Transport`: literal `http` (optional; default `http`)
 - `Method`: enum { `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, `OPTIONS` } (required)
 - `URLPath`: string (required)
 - `Headers`: map<string, any> (optional)
@@ -110,6 +119,54 @@ null is preserved and overrides lower-precedence Retry.
 - `Capture`: map<string, string> (optional) — extracts values from the response into the run-level captured dict. See `## Capture`.
 - `Expect`: list<map<string, any>> (optional) — assertions evaluated after the response. See `## Expect`.
 - `dynamics`: Dynamics (optional) — request-level dynamics merged with (and overriding) the top-level `dynamics` section.
+
+#### AmqpRequest (`Transport: amqp`)
+- `Transport`: literal `amqp` (required)
+- `AMQP`: AmqpSection (required) — exchange/routing/connection/properties for the publish. See `### AmqpSection`.
+- `Body`: map<string, any> (optional) — the message payload (serialized to JSON).
+- `FlowControl`: FlowControlCfg (optional) — `TimeoutSeconds` is reused as the publish/confirm deadline.
+- `Retry`: Retry (optional) [internal alias `RetryCfg`] — retries connection/network errors only (a `nack`/`unroutable` is a broker decision, not retried).
+- `Capture`: map<string, string> (optional) — see `## Capture`.
+- `Expect`: list<map<string, any>> (optional) — see `## Expect`.
+- `dynamics`: Dynamics (optional).
+- HTTP-only keys (`Method`, `URLPath`, `Headers`, `Query`, `URLRoot`, `InsecureTLS`, `Response`) are forbidden here; AMQP message headers live under `AMQP.Properties.Headers`.
+
+### AmqpSection (mapping, extra keys forbidden)
+- `URI`: string (optional) — broker connection string (`amqp://…` or `amqps://…`); overrides `Defaults.AMQP.URI`. Supports `{ $secrets: KEY }`.
+- `Exchange`: string (optional) — target exchange; `""` = the default (nameless) exchange.
+- `RoutingKey`: string (optional) — routing key / queue name (ignored by fanout exchanges).
+- `Confirm`: bool (optional) — wait for a publisher confirm (broker ack).
+- `Mandatory`: bool (optional) — fail if the message is unroutable.
+- `TLS`: AmqpTLS (optional) — TLS settings; applied only for `amqps://` URIs.
+- `WaitFor`: AmqpWaitFor (optional) — publish, then await a response (rpc reply or subscribed message). See `### AmqpWaitFor`.
+- `Properties`: AmqpProperties (optional) — AMQP message properties.
+
+### AmqpProperties (mapping, extra keys forbidden)
+- `ContentType`, `ContentEncoding`, `CorrelationId`, `ReplyTo`, `Expiration`, `MessageId`, `Type`, `AppId`: string (optional)
+- `DeliveryMode`: enum { `transient`, `persistent` } (optional)
+- `Priority`: int 0–9 (optional)
+- `Headers`: map<string, any> (optional) — AMQP application headers
+
+### AmqpTLS (mapping, extra keys forbidden)
+- `CAFile`: string (optional) — PEM file of CA cert(s) used to verify the broker
+- `CAPath`: string (optional) — directory of CA certs (hashed OpenSSL layout)
+- `CertFile`: string (optional) — client certificate (PEM) for mutual TLS
+- `KeyFile`: string (optional) — client private key (PEM) for mutual TLS
+- `VerifyPeer`: bool (optional; default true) — when false, skip certificate/hostname verification
+- `ServerName`: string (optional) — SNI/hostname to verify against (defaults to the URI host)
+- Note: `CAFile`/`CAPath` replace the default trust store (point `CAFile` at a bundle if the system roots are also needed).
+
+### AmqpWaitFor (mapping, extra keys forbidden)
+Publish, then await a response message within a timeout — one atomic operation.
+- `Mode`: enum { `rpc`, `subscribe` } (required)
+  - `rpc`: await a correlated reply on an auto reply-to queue (`reply_to` + `correlation_id` set on the outgoing message). Result `status` = `reply` | `timeout`.
+  - `subscribe`: declare a temp queue bound to `Exchange` **before** publishing the trigger, then await a message satisfying `Match`. Result `status` = `matched` | `timeout`.
+- `TimeoutSeconds`: float>=0 (optional; falls back to `FlowControl.TimeoutSeconds`, else 10s)
+- `Exchange`: string (subscribe only; required) — exchange to bind the temp queue to
+- `RoutingKey`: string (subscribe only; optional) — binding key/pattern (ignored by fanout)
+- `Match`: list<map<string, matcher>> (subscribe only; required) — Expect-style predicate list evaluated against each received message (body via `$`/`body.*`, headers via `headers.*` including `headers.x-amqp-routing-key`); the first message satisfying all conditions wins, others are discarded.
+- Mode `rpc` forbids `Exchange`/`RoutingKey`/`Match`; mode `subscribe` requires `Exchange` and `Match`.
+- The reply/matched message's body becomes the response body (available to `Capture`/`Expect`); its properties are projected into headers (lowercased). Synthesized headers include `x-correlation-id` (rpc) and `x-amqp-nonmatching-count` (subscribe).
 
 ### ResponseCfg (mapping, extra keys forbidden)
 - `PrettyPrint`: bool (optional) — if true, pretty-prints supported response types when writing files.
@@ -178,6 +235,7 @@ Matcher reference:
 
 Shorthand: a primitive value is sugar for `{ equals: <value> }`.
 - `status: 200` is equivalent to `status: { equals: 200 }`
+- For AMQP requests, `status` is a string label (`ack` / `nack` / `unroutable` / `published`, or `reply` / `matched` / `timeout` with `WaitFor`), so assert e.g. `status: ack` or `status: reply` rather than a numeric code.
 
 `$pattern` references are valid inside matcher values:
 ```yaml
@@ -208,8 +266,8 @@ The runner builds a resolved request set from the authored config using these ru
    - Only fall through when a level omits the `Retry` field entirely.
    - In the resolved output, `Retry` appears under each request if set by precedence. Explicit null is preserved.
 
-3) URLRoot propagation
-   - Each resolved request includes `URLRoot` copied from `Defaults.URLRoot`.
+3) URLRoot propagation (HTTP requests only)
+   - Each resolved HTTP request includes `URLRoot` copied from `Defaults.URLRoot`. AMQP requests do not receive `URLRoot` or `InsecureTLS`.
 
 4) FlowControl overlay
    - Effective `FlowControl` results from `Defaults.FlowControl` overlaid by `request.FlowControl` field-wise (`DelaySeconds`, `TimeoutSeconds`).
@@ -224,9 +282,13 @@ The runner builds a resolved request set from the authored config using these ru
    - The template syntax is validated at config-load time, but expansion occurs at request time so runtime values (including captured values) are available.
 
 7) Capture and Expect run at request time
-   - After the HTTP response is received, `Expect` assertions are evaluated first.
+   - After the response (HTTP body or AMQP result) is received, `Expect` assertions are evaluated first.
    - Then `Capture` paths are resolved and stored in the run-level `captured` dict.
    - Captured values from earlier requests are available to later requests via `${captured:KEY}` inside `$pattern` templates.
+
+8) AMQP requests (`Transport: amqp`)
+   - HTTP-only sections (`URLRoot`, `Headers`, `Query`, `InsecureTLS`, `Response`) are not applied. The `AMQP` block is merged from `Defaults.AMQP` (base), the request's `AMQP` (override), then `Forced.AMQP` (overlaid last); `AMQP.Properties.Headers` is deep-merged. `Body`, `Retry`, and `FlowControl` follow the same rules as HTTP.
+   - A publish produces a result mapped onto the same `(status, headers, body)` shape as HTTP, so `Capture`/`Expect` work identically. For AMQP, `status` is a string label: `ack`/`nack`/`unroutable`/`published` for a plain publish, or `reply`/`matched`/`timeout` when `AMQP.WaitFor` is set (rpc/subscribe). Synthesized response headers include `x-amqp-exchange`, `x-amqp-routing-key`, `x-amqp-confirmed`, `x-amqp-routed`. A `WaitFor` rpc reply or subscribe match carries a response body, so JSONPath/`body.*` `Capture`/`Expect` work on it; a plain publish has no body.
 
 ## Special operators ($...)
 Tooling should prefer and generate the concise mapping forms for all special operators. Long/verbose forms are allowed 
@@ -389,6 +451,9 @@ dynamics:
 - `Capture` path string with an unknown or malformed prefix.
 - `$pattern` with a non-string template or invalid placeholder syntax in the template string.
 - `${captured:KEY}` referenced in a context other than a `$pattern` template.
+- `Transport: amqp` request missing a broker URI, or with both `AMQP.Exchange` and `AMQP.RoutingKey` empty.
+- An HTTP-only key on an AMQP request, or an `AMQP` block on an HTTP request.
+- `Defaults.URLRoot` missing while the config contains an HTTP request.
 
 ## Authoring guidance
 - Prefer concise mapping forms for special operators:
