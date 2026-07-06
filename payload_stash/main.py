@@ -576,7 +576,7 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool, secrets: Path | N
                         caps_snap = dict(captured)
 
                     method = (r_val.get("Method") or "").upper()
-                    url_path = r_val.get("URLPath") or ""
+                    url_path_raw = r_val.get("URLPath")
                     headers_raw = r_val.get("Headers")
                     body_raw = r_val.get("Body")
                     query_raw = r_val.get("Query")
@@ -591,9 +591,16 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool, secrets: Path | N
                     if expect_cfg is not None:
                         expect_cfg = resolve_deferred(expect_cfg, secrets=secrets_map, captures=caps_snap)
 
+                    # URLRoot/URLPath support the same operators as Headers/Body/Query
+                    # ($secrets/$dynamic/$timestamp/$pattern, incl. ${captured:KEY} at request time).
+                    url_root_res = resolve_deferred(url_root, secrets=secrets_map, captures=caps_snap)
+                    url_path_res = resolve_deferred(url_path_raw, secrets=secrets_map, captures=caps_snap)
+                    url_root_str = url_root_res if isinstance(url_root_res, str) else ("" if url_root_res is None else str(url_root_res))
+                    url_path_str = url_path_res if isinstance(url_path_res, str) else ("" if url_path_res is None else str(url_path_res))
+
                     # Build URL
-                    base = (url_root or "").rstrip('/')
-                    upath = (url_path or "").lstrip('/')
+                    base = url_root_str.rstrip('/')
+                    upath = url_path_str.lstrip('/')
                     full_url = base + ("/" if upath else "") + upath
                     if query_res:
                         qparts = urlparse.urlencode(query_res, doseq=True, safe="/:?")
@@ -616,7 +623,7 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool, secrets: Path | N
                         headers_out['Content-Type'] = 'application/json; charset=utf-8'
 
                     resolved_request_block = {
-                        "Method": method, "URLRoot": url_root, "URLPath": url_path,
+                        "Method": method, "URLRoot": url_root_str, "URLPath": url_path_str,
                         "Headers": headers_res, "Body": body_res, "Query": query_res,
                         "TimeoutSeconds": timeout_s, "InsecureTLS": insecure_eff,
                     }
