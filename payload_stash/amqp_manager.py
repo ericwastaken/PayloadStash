@@ -281,18 +281,22 @@ class AmqpManager:
                 props = self._build_properties(props_in)
                 ch.basic_publish(exchange=exchange or "", routing_key=routing_key or "",
                                  body=body or b"", properties=props, mandatory=bool(mandatory))
+                wait_t0 = time.monotonic()
                 hit = self._consume_until(
                     ch, reply_q, deadline_s,
                     match=lambda m, p, b: str(getattr(p, "correlation_id", None) or "") == corr_id,
                 )
+                wait_ms = int(round((time.monotonic() - wait_t0) * 1000))
                 if hit is None:
                     headers = dict(base_headers)
                     headers["x-correlation-id"] = corr_id
+                    headers["x-amqp-wait-ms"] = str(wait_ms)
                     return "timeout", headers, ""
                 _m, p, b = hit
                 headers = dict(base_headers)
                 headers.update(self._props_to_headers(p))
                 headers.setdefault("x-correlation-id", corr_id)
+                headers["x-amqp-wait-ms"] = str(wait_ms)
                 text = b.decode("utf-8", "replace") if isinstance(b, (bytes, bytearray)) else str(b)
                 return "reply", headers, text
 
@@ -319,16 +323,20 @@ class AmqpManager:
                     nonmatching[0] += 1
                 return ok
 
+            wait_t0 = time.monotonic()
             hit = self._consume_until(ch, temp_q, deadline_s, match=_matches)
+            wait_ms = int(round((time.monotonic() - wait_t0) * 1000))
             if hit is None:
                 headers = dict(base_headers)
                 headers["x-amqp-nonmatching-count"] = str(nonmatching[0])
+                headers["x-amqp-wait-ms"] = str(wait_ms)
                 return "timeout", headers, ""
             m, p, b = hit
             headers = dict(base_headers)
             headers.update(self._props_to_headers(p))
             headers["x-amqp-routing-key"] = getattr(m, "routing_key", "") or ""
             headers["x-amqp-nonmatching-count"] = str(nonmatching[0])
+            headers["x-amqp-wait-ms"] = str(wait_ms)
             text = b.decode("utf-8", "replace") if isinstance(b, (bytes, bytearray)) else str(b)
             return "matched", headers, text
         finally:

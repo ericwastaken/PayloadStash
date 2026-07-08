@@ -41,7 +41,7 @@ Top-level keys outside `StashConfig` and `dynamics` are ignored by the parser â€
 
 ```yaml
 Defaults:
-  URLRoot: https://api.example.com   # required, no trailing slash
+  URLRoot: https://api.example.com   # required for HTTP, no trailing slash; supports $secrets/$dynamic/$pattern
   FlowControl:                        # required
     DelaySeconds: 0                   # int >= 0
     TimeoutSeconds: 30                # int >= 0
@@ -91,7 +91,7 @@ Sequences:
     Requests:
       - RequestKey:           # unique within this sequence; used in filenames and reports
           Method: POST        # GET | POST | PUT | PATCH | DELETE | HEAD | OPTIONS
-          URLPath: /v1/thing  # appended to URLRoot
+          URLPath: /v1/thing  # appended to URLRoot; supports operators incl. ${captured:KEY}
           Headers: ...        # optional; overrides Defaults.Headers
           Body: ...           # optional; overrides Defaults.Body
           Query: ...          # optional; overrides Defaults.Query
@@ -551,6 +551,7 @@ Notes:
 - For `subscribe` the listener is established *before* the trigger is published, so a fast broadcast can't be missed.
 - `rpc` forbids `Exchange`/`RoutingKey`/`Match` under `WaitFor`; `subscribe` requires `Exchange` + `Match`.
 - The reply/matched message's body feeds `Capture`, so `${captured:KEY}` can carry it into later requests.
+- `duration_ms` for a WaitFor request includes the time spent awaiting. The await portion is also broken out as an `x-amqp-wait-ms` response header (shown as `(awaited Nms)` next to Duration in the report, and assertable via `headers.x-amqp-wait-ms`).
 
 ### Fanout broadcast + mixed HTTP/AMQP
 
@@ -892,7 +893,7 @@ payloadstash run amqp-signals.yml --out ./output --secrets secrets.env
 ## Validation Rules (errors to avoid)
 
 - `StashConfig.Name` must be non-empty.
-- `Defaults.URLRoot` must be non-empty (no trailing slash) when the config has HTTP requests; it may be omitted for AMQP-only configs.
+- `Defaults.URLRoot` must be non-empty (no trailing slash) when the config has HTTP requests; it may be omitted for AMQP-only configs. It may be a plain string or a `$secrets`/`$dynamic`/`$pattern` operator (same as `URLPath`).
 - `Defaults.FlowControl` with both `DelaySeconds` and `TimeoutSeconds` is required.
 - `Sequence.Name` values must be unique across all sequences.
 - Request keys must be unique within each sequence.

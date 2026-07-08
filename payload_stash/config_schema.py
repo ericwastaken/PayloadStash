@@ -151,7 +151,8 @@ class DefaultsSection(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
     # URLRoot is required only when at least one HTTP request is present (enforced in StashConfig).
-    URLRoot: Optional[str] = None
+    # May be a string, or a $secrets/$dynamic/$pattern operator (resolved like Headers/Body/Query).
+    URLRoot: Optional[Union[str, Dict[str, Any]]] = None
     FlowControl: FlowControlCfg
 
     # Optional Defaults
@@ -185,7 +186,8 @@ class HttpRequest(BaseModel):
 
     Transport: Literal["http"] = "http"
     Method: Method
-    URLPath: str
+    # str, or a $secrets/$dynamic/$pattern operator (resolved like Headers/Body/Query)
+    URLPath: Union[str, Dict[str, Any]]
     Headers: Optional[Dict[str, Any]] = None
     Body: Optional[Dict[str, Any]] = None
     Query: Optional[Dict[str, Any]] = None
@@ -299,8 +301,10 @@ class StashConfig(BaseModel):
             getattr(item.value, "Transport", "http") == "http"
             for seq in self.Sequences for item in seq.Requests
         )
-        if has_http and (not isinstance(self.Defaults.URLRoot, str) or not self.Defaults.URLRoot.strip()):
-            raise ValueError("Defaults.URLRoot is required and must be a non-empty string when HTTP requests are present")
+        if has_http:
+            _ur = self.Defaults.URLRoot
+            if _ur is None or (isinstance(_ur, str) and not _ur.strip()):
+                raise ValueError("Defaults.URLRoot is required (a non-empty string or a $secrets/$dynamic/$pattern value) when HTTP requests are present")
         return self
 
     @model_validator(mode='after')
@@ -672,7 +676,7 @@ def build_resolved_config_dict(cfg: TopLevelConfig, secrets: Optional[Dict[str, 
     if defaults is not None:
         d: Dict[str, Any] = {}
         if defaults.URLRoot is not None:
-            d["URLRoot"] = defaults.URLRoot
+            d["URLRoot"] = _resolve_values(defaults.URLRoot, dyn, secrets, redact_secrets, resolved_dyn_cache)
         if defaults.FlowControl is not None:
             fc: Dict[str, Any] = {}
             if defaults.FlowControl.DelaySeconds is not None:
@@ -829,7 +833,7 @@ def build_resolved_config_dict(cfg: TopLevelConfig, secrets: Optional[Dict[str, 
             req_out: Dict[str, Any] = {
                 item.key: {
                     "Method": req.Method.value,
-                    "URLPath": req.URLPath,
+                    "URLPath": _resolve_values(req.URLPath, eff_dyn, secrets, redact_secrets, eff_cache),
                 }
             }
             inner = req_out[item.key]
@@ -844,9 +848,9 @@ def build_resolved_config_dict(cfg: TopLevelConfig, secrets: Optional[Dict[str, 
                 inner["Response"] = req.Response.model_dump(exclude_none=True)
             elif defaults is not None and defaults.Response is not None:
                 inner["Response"] = defaults.Response.model_dump(exclude_none=True)
-            # Always include effective URLRoot from Defaults
-            if defaults and defaults.URLRoot:
-                inner["URLRoot"] = defaults.URLRoot
+            # Always include effective URLRoot from Defaults (resolved like other sections)
+            if defaults and defaults.URLRoot is not None:
+                inner["URLRoot"] = _resolve_values(defaults.URLRoot, eff_dyn, secrets, redact_secrets, eff_cache)
             # Include effective FlowControl (Defaults overridden by per-request)
             fc_eff: Dict[str, Any] = {}
             if defaults and defaults.FlowControl is not None:
