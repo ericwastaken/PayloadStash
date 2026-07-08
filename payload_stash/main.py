@@ -88,6 +88,7 @@ def _write_markdown_report(report_path, sc_name: str, config_stem: str, started_
         capture_cfg = entry["capture_cfg"]
         captured_values = entry["captured_values"]
         expect_results = entry["expect_results"]
+        resp_headers = entry.get("resp_headers") or {}
 
         # Determine status badge
         if expect_results is not None:
@@ -122,7 +123,12 @@ def _write_markdown_report(report_path, sc_name: str, config_stem: str, started_
 
         lines.append("### Response\n")
         status_label = str(status) if status != -1 else "ERROR"
-        lines.append(f"**Status:** {status_label}  **Duration:** {duration_ms}ms\n")
+        # For AMQP WaitFor/RPC the duration includes the await; break out the wait portion when present.
+        _wait_ms = resp_headers.get("x-amqp-wait-ms") if isinstance(resp_headers, dict) else None
+        _dur_line = f"**Status:** {status_label}  **Duration:** {duration_ms}ms"
+        if _wait_ms is not None:
+            _dur_line += f" (awaited {_wait_ms}ms)"
+        lines.append(_dur_line + "\n")
         if resp_text:
             lines.append(_body_snippet(resp_text, ct_value))
             lines.append("")
@@ -302,6 +308,20 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool, secrets: Path | N
             pool_size = 50
             rm = RequestManager(pool_maxsize=pool_size)
 
+            # Construct an AMQP manager only if the config actually uses the amqp transport.
+            am = None
+            try:
+                _has_amqp = any(
+                    isinstance(rq, dict) and len(rq) == 1 and (next(iter(rq.values())) or {}).get("Transport") == "amqp"
+                    for sd in resolved_actual.get("StashConfig", {}).get("Sequences", [])
+                    for rq in sd.get("Requests", [])
+                )
+            except Exception:
+                _has_amqp = False
+            if _has_amqp:
+                from .amqp_manager import AmqpManager
+                am = AmqpManager()
+
             start_run_log(log_path, ts, sc_name, resolved_path)
 
             # Logging helpers with secret redaction
@@ -389,7 +409,7 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool, secrets: Path | N
                 return obj
 
 
-            def _append_result_row(seq_name: str, req_name: str, ts_iso: str, status_code: int, duration_ms: int, attempts: int, expect_passed: int = 0, expect_failed: int = 0) -> None:
+            def _append_result_row(seq_name: str, req_name: str, ts_iso: str, status_code, duration_ms: int, attempts: int, expect_passed: int = 0, expect_failed: int = 0) -> None:
                 try:
                     with csv_lock:
                         with results_csv_path.open('a', encoding='utf-8', newline='') as cf:
@@ -552,13 +572,17 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool, secrets: Path | N
                     except Exception:
                         pass
 
+                    # Dispatch AMQP requests to the AMQP path; the HTTP path below is unchanged.
+                    if r_val.get("Transport", "http") == "amqp":
+                        return _process_amqp_request(idx, total_in_seq, r_key, r_val, timeout_s, effective_retry, seq_i)
+
                     # Snapshot captures so all refs in this request see a consistent state,
                     # even if another thread is writing captures concurrently.
                     with captures_lock:
                         caps_snap = dict(captured)
 
                     method = (r_val.get("Method") or "").upper()
-                    url_path = r_val.get("URLPath") or ""
+                    url_path_raw = r_val.get("URLPath")
                     headers_raw = r_val.get("Headers")
                     body_raw = r_val.get("Body")
                     query_raw = r_val.get("Query")
@@ -573,9 +597,16 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool, secrets: Path | N
                     if expect_cfg is not None:
                         expect_cfg = resolve_deferred(expect_cfg, secrets=secrets_map, captures=caps_snap)
 
+                    # URLRoot/URLPath support the same operators as Headers/Body/Query
+                    # ($secrets/$dynamic/$timestamp/$pattern, incl. ${captured:KEY} at request time).
+                    url_root_res = resolve_deferred(url_root, secrets=secrets_map, captures=caps_snap)
+                    url_path_res = resolve_deferred(url_path_raw, secrets=secrets_map, captures=caps_snap)
+                    url_root_str = url_root_res if isinstance(url_root_res, str) else ("" if url_root_res is None else str(url_root_res))
+                    url_path_str = url_path_res if isinstance(url_path_res, str) else ("" if url_path_res is None else str(url_path_res))
+
                     # Build URL
-                    base = (url_root or "").rstrip('/')
-                    upath = (url_path or "").lstrip('/')
+                    base = url_root_str.rstrip('/')
+                    upath = url_path_str.lstrip('/')
                     full_url = base + ("/" if upath else "") + upath
                     if query_res:
                         qparts = urlparse.urlencode(query_res, doseq=True, safe="/:?")
@@ -598,7 +629,7 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool, secrets: Path | N
                         headers_out['Content-Type'] = 'application/json; charset=utf-8'
 
                     resolved_request_block = {
-                        "Method": method, "URLRoot": url_root, "URLPath": url_path,
+                        "Method": method, "URLRoot": url_root_str, "URLPath": url_path_str,
                         "Headers": headers_res, "Body": body_res, "Query": query_res,
                         "TimeoutSeconds": timeout_s, "InsecureTLS": insecure_eff,
                     }
@@ -776,6 +807,197 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool, secrets: Path | N
                             report_entries.append(entry)
                     except Exception:
                         pass
+
+                def _process_amqp_request(idx: int, total_in_seq: int, r_key: str,
+                                          r_val: dict, timeout_s: float | None,
+                                          effective_retry: dict | None,
+                                          seq_i: int) -> tuple[int, list[str], int]:
+                    # AMQP sibling of _process_single_request. AmqpManager.publish returns the same
+                    # (status, headers, text, attempts, log) tuple, so the Capture/Expect/CSV/report
+                    # logic below is identical to the HTTP path. `status` is a string label for AMQP.
+                    lines: list[str] = []
+                    expect_fail_count = 0
+
+                    with captures_lock:
+                        caps_snap = dict(captured)
+
+                    amqp_raw = r_val.get("AMQP") or {}
+                    body_raw = r_val.get("Body")
+                    capture_cfg = r_val.get("Capture")
+                    expect_cfg = r_val.get("Expect")
+
+                    amqp_res = resolve_deferred(amqp_raw, secrets=secrets_map, captures=caps_snap)
+                    body_res = resolve_deferred(body_raw, secrets=secrets_map, captures=caps_snap) if body_raw is not None else None
+                    if expect_cfg is not None:
+                        expect_cfg = resolve_deferred(expect_cfg, secrets=secrets_map, captures=caps_snap)
+
+                    uri = amqp_res.get("URI")
+                    exchange = amqp_res.get("Exchange") or ""
+                    routing_key = amqp_res.get("RoutingKey") or ""
+                    confirm = bool(amqp_res.get("Confirm") or False)
+                    mandatory = bool(amqp_res.get("Mandatory") or False)
+                    tls = amqp_res.get("TLS")
+                    waitfor = amqp_res.get("WaitFor")
+                    properties = amqp_res.get("Properties") or {}
+
+                    data_bytes = None
+                    if body_res is not None:
+                        try:
+                            data_bytes = _json.dumps(body_res).encode('utf-8')
+                        except Exception:
+                            data_bytes = str(body_res).encode('utf-8')
+
+                    _wf_mode = (waitfor or {}).get("Mode")
+                    if _wf_mode == "rpc":
+                        method_label = "AMQP RPC"
+                    elif _wf_mode == "subscribe":
+                        method_label = "AMQP WAITFOR"
+                    else:
+                        method_label = "AMQP PUBLISH"
+                    target_label = f"amqp exchange={exchange or '(default)'} routingKey={routing_key or '(none)'}"
+
+                    resolved_request_block = {
+                        "Transport": "amqp",
+                        "AMQP": amqp_res,
+                        "Body": body_res,
+                        "TimeoutSeconds": timeout_s,
+                    }
+
+                    start_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                    lines.append(f"  Request {idx}/{total_in_seq}: {r_key}")
+                    lines.append(f"    Target: {_redact_text(target_label)}")
+                    lines.append(f"    Start: {start_iso}")
+                    seq_name_csv = seq_dir_name
+                    req_name_csv = f"req{idx:03d}-{r_key}"
+                    y_req = yaml_to_string(_redact_struct(resolved_request_block)).splitlines()
+                    lines.append("    Resolved Request:")
+                    lines.extend(["      " + ln for ln in y_req])
+                    if effective_retry is None:
+                        lines.append("    Resolved Retry: Null")
+                    else:
+                        y_ret = yaml_to_string(effective_retry).splitlines()
+                        lines.append("    Resolved Retry:")
+                        lines.extend(["      " + ln for ln in y_ret])
+
+                    if dry_run:
+                        _dry_action = "publish + await reply" if _wf_mode == "rpc" else ("publish + await match" if _wf_mode == "subscribe" else "publish")
+                        lines.append(f"    DRY-RUN: would {_dry_action} (skipped)")
+                        try:
+                            _append_result_row(seq_name_csv, req_name_csv, start_iso, -1, 0, 0)
+                        except Exception:
+                            pass
+                        return idx, lines, 0
+
+                    duration_ms = 0
+                    resp_text = ""
+                    resp_headers: dict = {}
+                    status = -1
+                    attempts_made = 0
+                    expect_results = None
+                    try:
+                        t0 = time.perf_counter()
+                        status, resp_headers, resp_text, attempts_made, req_log = am.publish(
+                            uri=uri,
+                            exchange=exchange,
+                            routing_key=routing_key,
+                            body=data_bytes,
+                            properties=properties,
+                            confirm=confirm,
+                            mandatory=mandatory,
+                            timeout_s=timeout_s,
+                            retry_cfg=effective_retry,
+                            tls=tls,
+                            waitfor=waitfor,
+                        )
+                        t1 = time.perf_counter()
+                        duration_ms = int(round((t1 - t0) * 1000))
+                        if req_log:
+                            for l in req_log.splitlines():
+                                lines.append("    " + _redact_text(l))
+                        lines.append(f"    Response: {status}")
+                        lines.append(f"    Attempts: {attempts_made}")
+                        y_hdr = yaml_to_string(_redact_struct(resp_headers)).splitlines()
+                        lines.append("    Response Headers:")
+                        lines.extend(["      " + ln for ln in y_hdr])
+
+                        ct_value = None
+                        for hk, hv in (resp_headers or {}).items():
+                            if str(hk).lower() == 'content-type':
+                                ct_value = str(hv)
+                                break
+                        ext = 'txt'
+                        if isinstance(ct_value, str) and '/' in ct_value:
+                            try:
+                                subtype = ct_value.split(';', 1)[0].strip().split('/', 1)[1].strip()
+                                if subtype:
+                                    ext = subtype.lower()
+                            except Exception:
+                                pass
+
+                        if capture_cfg:
+                            new_captures = {}
+                            for cap_name, cap_path in capture_cfg.items():
+                                try:
+                                    val = resolve_response_path(cap_path, status, resp_headers, resp_text, duration_ms)
+                                    new_captures[cap_name] = val
+                                    lines.append(f"    Capture: {cap_name} = {val!r}")
+                                except Exception as ce:
+                                    lines.append(f"    Capture warning ({cap_name}): {ce}")
+                            if new_captures:
+                                with captures_lock:
+                                    captured.update(new_captures)
+
+                        expect_passed = 0
+                        expect_failed_local = 0
+                        if expect_cfg:
+                            expect_results = evaluate_expect(expect_cfg, status, resp_headers, resp_text, duration_ms)
+                            lines.append("    Expect:")
+                            for label, passed, detail in expect_results:
+                                mark = "✓" if passed else "✗"
+                                lines.append(f"      {mark} {label}")
+                                if detail:
+                                    lines.append(f"    {detail}")
+                                if passed:
+                                    expect_passed += 1
+                                else:
+                                    expect_failed_local += 1
+                            expect_fail_count = expect_failed_local
+                            with captures_lock:
+                                run_expect_failures[0] += expect_failed_local
+
+                        if resp_text:
+                            try:
+                                resp_out_path = seq_out_dir / f"req{idx:03d}-{r_key}-response.{ext}"
+                                with resp_out_path.open('w', encoding='utf-8') as rf:
+                                    rf.write(resp_text)
+                                lines.append(f"    Response Body: written to {resp_out_path}")
+                            except Exception as we:
+                                lines.append(f"    Warning: failed to write response body file: {we}")
+
+                        _append_result_row(seq_name_csv, req_name_csv, start_iso, status, duration_ms, attempts_made, expect_passed, expect_failed_local)
+                        _build_report_entry(seq_i, idx, r_key, method_label, target_label, properties, body_res,
+                                            status, duration_ms, resp_headers, resp_text, ct_value,
+                                            capture_cfg, captured if capture_cfg else None,
+                                            expect_cfg, expect_results if expect_cfg else None)
+                    except Exception as he:
+                        req_log_err = getattr(he, "request_log", None)
+                        if req_log_err:
+                            for line in str(req_log_err).splitlines():
+                                lines.append("    " + _redact_text(line))
+                        lines.append(f"    ERROR: Publish failed: {he}")
+                        try:
+                            t1 = time.perf_counter()
+                            duration_ms = int(round((t1 - t0) * 1000))
+                        except Exception:
+                            pass
+                        attempts_fail = getattr(he, "attempts_made", 1)
+                        _append_result_row(seq_name_csv, req_name_csv, start_iso, -1, duration_ms,
+                                           int(attempts_fail) if isinstance(attempts_fail, (int, float)) else 1)
+                        _build_report_entry(seq_i, idx, r_key, method_label, target_label, properties, body_res,
+                                            -1, duration_ms, {}, str(he), None,
+                                            None, None, None, None)
+
+                    return idx, lines, expect_fail_count
 
                 # Execute sequentially or concurrently
                 s_type = (seq_d.get("Type") or "Sequential").strip()

@@ -1,0 +1,65 @@
+# Same as amqp-test.yml but publishes over amqps (TLS) with a private CA.
+# Verifies AMQP.TLS: the broker cert is checked against tls/certs/ca.pem.
+common_props: &common_props
+  DeliveryMode: persistent
+  Headers:
+    x-source: payloadstash
+
+dynamics:
+  patterns:
+    bandId:
+      template: "04${hex:14}"
+
+StashConfig:
+  Name: AmqpTlsIntegrationTest
+
+  Defaults:
+    FlowControl:
+      DelaySeconds: 0
+      TimeoutSeconds: 10
+    AMQP:
+      URI: "{ $secrets: RMQ_URI }"       # amqps://guest:guest@localhost:5671/%2F
+      Confirm: true
+      Exchange: frontline.exchange
+      TLS:
+        CAFile: tls/certs/ca.pem          # relative to the dir you run from (amqp-test/)
+        VerifyPeer: true                  # verify broker cert against the CA + hostname (localhost)
+
+  Forced:
+    AMQP:
+      Properties:
+        Headers:
+          x-run: integration-test
+
+  Sequences:
+
+    - Name: EmitSignals
+      Type: Sequential
+      Requests:
+        - emit-coin:
+            Transport: amqp
+            AMQP:
+              RoutingKey: device.signal.coin
+              Properties:
+                <<: *common_props
+                CorrelationId: { $pattern: "${uuidv4}" }
+            Body:
+              bandId: { $dynamic: bandId, when: request }
+              action: coin_grant
+            Expect:
+              - status: ack
+
+        - broadcast-refresh:
+            Transport: amqp
+            AMQP: { Exchange: state.fanout }
+            Body: { type: refresh }
+            Expect:
+              - status: ack
+
+    - Name: BurstBananas
+      Type: Concurrent
+      ConcurrencyLimit: 3
+      Requests:
+        - b1: { Transport: amqp, AMQP: { RoutingKey: device.signal.banana }, Body: { action: banana_grant, n: 1 } }
+        - b2: { Transport: amqp, AMQP: { RoutingKey: device.signal.banana }, Body: { action: banana_grant, n: 2 } }
+        - b3: { Transport: amqp, AMQP: { RoutingKey: device.signal.banana }, Body: { action: banana_grant, n: 3 } }

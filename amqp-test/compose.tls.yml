@@ -1,0 +1,18 @@
+# TLS variant of the test broker. Run tls/gen-certs.sh first.
+# Usage: docker compose -f compose.tls.yml up -d --wait   (then ./run-test-tls.sh)
+services:
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: payloadstash-rmq
+    ports:
+      - "5671:5671"     # AMQPS
+      - "5672:5672"     # AMQP (used by declare.py / drain.py)
+      - "15672:15672"   # Management UI
+    volumes:
+      - ./rabbitmq/rabbitmq-tls.conf:/etc/rabbitmq/rabbitmq.conf:ro
+      - ./tls/certs:/certs:ro
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
