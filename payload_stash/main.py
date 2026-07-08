@@ -88,6 +88,7 @@ def _write_markdown_report(report_path, sc_name: str, config_stem: str, started_
         capture_cfg = entry["capture_cfg"]
         captured_values = entry["captured_values"]
         expect_results = entry["expect_results"]
+        resp_headers = entry.get("resp_headers") or {}
 
         # Determine status badge
         if expect_results is not None:
@@ -122,7 +123,12 @@ def _write_markdown_report(report_path, sc_name: str, config_stem: str, started_
 
         lines.append("### Response\n")
         status_label = str(status) if status != -1 else "ERROR"
-        lines.append(f"**Status:** {status_label}  **Duration:** {duration_ms}ms\n")
+        # For AMQP WaitFor/RPC the duration includes the await; break out the wait portion when present.
+        _wait_ms = resp_headers.get("x-amqp-wait-ms") if isinstance(resp_headers, dict) else None
+        _dur_line = f"**Status:** {status_label}  **Duration:** {duration_ms}ms"
+        if _wait_ms is not None:
+            _dur_line += f" (awaited {_wait_ms}ms)"
+        lines.append(_dur_line + "\n")
         if resp_text:
             lines.append(_body_snippet(resp_text, ct_value))
             lines.append("")

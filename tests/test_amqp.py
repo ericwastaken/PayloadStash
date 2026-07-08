@@ -407,6 +407,7 @@ def test_waitfor_manager():
     check("rpc set reply_to + correlation on request",
           getattr(ch.published[0][3], "reply_to", None) and getattr(ch.published[0][3], "correlation_id", None))
     check("rpc reply carries x-correlation-id", "x-correlation-id" in headers)
+    check("rpc reply carries x-amqp-wait-ms", "x-amqp-wait-ms" in headers)
 
     # rpc: timeout (no reply staged)
     ch = _WFChannel(); ch.rpc_reply = None
@@ -426,6 +427,7 @@ def test_waitfor_manager():
     check("subscribe matched body", '"playFabId":"PF-9"' in text or '"PF-9"' in text)
     check("subscribe counts non-matching", headers.get("x-amqp-nonmatching-count") == "1")
     check("subscribe binds before publishing (queue bound, trigger sent)", len(ch.published) == 1)
+    check("subscribe matched carries x-amqp-wait-ms", "x-amqp-wait-ms" in headers)
 
     # subscribe: no match -> timeout
     ch = _WFChannel()

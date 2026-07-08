@@ -551,6 +551,7 @@ Notes:
 - For `subscribe` the listener is established *before* the trigger is published, so a fast broadcast can't be missed.
 - `rpc` forbids `Exchange`/`RoutingKey`/`Match` under `WaitFor`; `subscribe` requires `Exchange` + `Match`.
 - The reply/matched message's body feeds `Capture`, so `${captured:KEY}` can carry it into later requests.
+- `duration_ms` for a WaitFor request includes the time spent awaiting. The await portion is also broken out as an `x-amqp-wait-ms` response header (shown as `(awaited Nms)` next to Duration in the report, and assertable via `headers.x-amqp-wait-ms`).
 
 ### Fanout broadcast + mixed HTTP/AMQP
 
