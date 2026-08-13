@@ -2,10 +2,11 @@
 set -euo pipefail
 
 # Package a native Python distribution of PayloadStash for transfer to another machine
-# where the recipient will run `python3 setup.py install` (or `pip install .`).
+# where the recipient can use UV metadata or the setup.py/manual path.
 #
 # What this script does:
 # - Creates ./packaged-python/payloadstash-python/
+# - Copies pyproject.toml for UV users
 # - Copies setup.py, requirements.txt, payload_stash/ package, LICENSE, README.md
 # - Copies ./config/ README and example files
 # - Produces ./packaged-python/payloadstash-python.zip with payloadstash-python/ as the root
@@ -40,6 +41,9 @@ mkdir -p "$PAYLOAD_DIR"
 
 # 2) Copy Python project files
 cp -f "$PROJECT_ROOT/setup.py" "$PAYLOAD_DIR/"
+if [[ -f "$PROJECT_ROOT/pyproject.toml" ]]; then
+  cp -f "$PROJECT_ROOT/pyproject.toml" "$PAYLOAD_DIR/"
+fi
 cp -f "$PROJECT_ROOT/requirements.txt" "$PAYLOAD_DIR/" || true
 cp -f "$PROJECT_ROOT/LICENSE" "$PAYLOAD_DIR/" || true
 cp -f "$PROJECT_ROOT/README.md" "$PAYLOAD_DIR/" || true

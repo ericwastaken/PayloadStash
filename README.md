@@ -27,24 +27,43 @@ saved to disk with file extensions based on **Content‑Type**.
 
 ## Quick Start - Native (recommended for most users)
 
-```bash
-# 1) Install (venv will be created in ./.venv)
-# Regular install: (recommended for users)
-python3 bootstrap.py
-# Editable (dev) install: (recommended for developers)
-python3 bootstrap.py --editable
+### Option A: UV (recommended)
 
-# 2) Run a config (you can run without activating the venv)
-./payloadstash run path/to/config.yml --out ./out
+Use UV from a source checkout to sync dependencies and run the `payloadstash` console command declared in
+`pyproject.toml`.
+
+```bash
+# 1) Install/sync dependencies into UV's managed environment
+uv sync
+
+# 2) Run a config
+uv run payloadstash run path/to/config.yml --out ./out
 
 # 3) Validate only (no requests)
-./payloadstash validate path/to/config.yml
+uv run payloadstash validate path/to/config.yml
 
 # 4) Emit the fully-resolved config (after anchors & merges)
+uv run payloadstash resolve path/to/config.yml --out ./out
+```
+
+### Option B: setup.py/bootstrap
+
+Use the existing bootstrap path if you prefer the repository-managed `.venv` and `./payloadstash` wrapper.
+
+```bash
+# Regular install (creates ./.venv)
+python3 bootstrap.py
+
+# Editable install for development
+python3 bootstrap.py --editable
+
+# Run through the bootstrap wrapper
+./payloadstash run path/to/config.yml --out ./out
+./payloadstash validate path/to/config.yml
 ./payloadstash resolve path/to/config.yml --out ./out
 ```
 
-If you prefer to manage venvs yourself:
+If you prefer to manage venvs yourself for the setup.py path:
 
 ```bash
 python -m venv .venv && .venv/bin/python -m pip install -U pip && .venv/bin/pip install -e .
@@ -121,15 +140,21 @@ Notes:
 
 ## Quick Start - Developer Install
 
-If you are developing PayloadStash, the recommended editable install is via the bootstrap script:
+### Option A: UV development (recommended)
+
+- Sync the development environment: `uv sync`
+- Run the CLI without activating a venv: `uv run payloadstash --help`
+- Edit code and rerun with `uv run payloadstash ...`.
+
+### Option B: setup.py/bootstrap editable install
 
 - Editable install (creates .venv and installs -e): `python3 bootstrap.py --editable`
 - Reinstall only when:
     - dependencies change, or
     - entry point names change.
-- Otherwise, edit code and rerun the CLI `payloadstash`, no reinstall needed.
+- Otherwise, edit code and rerun the CLI with `./payloadstash`, no reinstall needed.
 
-If you prefer to manage venvs yourself:
+If you prefer to manage venvs yourself for the setup.py path:
 
 - Do once per environment: `python -m venv .venv && .venv/bin/python -m pip install -U pip && .venv/bin/pip install -e .`
 

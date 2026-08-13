@@ -11,7 +11,8 @@ To create a new release, run the packaging script from the root of the repositor
 
 ## What is `payloadstash-python.zip`?
 `payloadstash-python.zip` is a bundle that includes:
-- `setup.py` — the installer entry point for the project.
+- `pyproject.toml` — UV-native project metadata and console script declaration.
+- `setup.py` — the installer entry point for the setup.py/manual path.
 - `requirements.txt` — Python dependencies for the project.
 - `payload_stash/` — the Python package source code.
 - `LICENSE`, `README.md` — project docs.
@@ -45,10 +46,19 @@ Check your Python version with:
 - `python3 --version`
 
 ## Install PayloadStash into the environment
-You can install using setup.py or pip. Two common options:
+Choose one native Python path.
 
-Using setup.py directly
-- `python3 setup.py install`
+### Option A: UV (recommended)
+
+- Sync dependencies: `uv sync`
+- Check the CLI: `uv run payloadstash --help`
+- Run a config: `uv run payloadstash run ./config/config-example.yml --out ./output`
+
+### Option B: setup.py/manual path
+
+- Using setup.py directly: `python3 setup.py install`
+- Or manually create a venv and install with pip:
+  `python3 -m venv .venv && .venv/bin/python -m pip install -U pip && .venv/bin/pip install .`
 
 This project’s `setup.py` includes a custom step that attempts to create a `.venv` virtual environment at the project root
 and install requirements there. If that step fails, the installation will still proceed, but you may want to manually
@@ -64,10 +74,11 @@ For the full documentation on configuring PayloadStash, see the [PayloadStash on
 - Secrets/Environment variables: if your configuration expects a `.env`/env file, place it in the `config/` folder.
 
 ## Run the CLI
-Once installed, the `payloadstash` command should be available in your environment. Examples:
-- Validate a config: `payloadstash validate ./config/config-example.yml`
-- Execute a run: `payloadstash run ./config/config-example.yml`
-- With secrets: `payloadstash run ./config/config-example.yml --secrets ./config/secrets.env`
+If you chose UV, run commands through `uv run payloadstash ...`. If you chose the setup.py/manual path, the
+`payloadstash` command should be available in your environment. Examples:
+- Validate a config: `uv run payloadstash validate ./config/config-example.yml` or `payloadstash validate ./config/config-example.yml`
+- Execute a run: `uv run payloadstash run ./config/config-example.yml` or `payloadstash run ./config/config-example.yml`
+- With secrets: `uv run payloadstash run ./config/config-example.yml --secrets ./config/secrets.env` or `payloadstash run ./config/config-example.yml --secrets ./config/secrets.env`
 
 If you installed into a virtual environment manually, ensure it is activated before running the command.
 

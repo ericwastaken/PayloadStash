@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "payloadstash"
+version = "1.0.5"
+description = "PayloadStash: YAML-driven HTTP fetch-and-stash for Python."
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+dependencies = [
+    "click>=8.0.0",
+    "pyyaml>=6.0",
+    "pydantic>=2.0.0",
+    "urllib3>=2.0.0",
+    "backoff>=2.2.1",
+    "rich>=13.0.0",
+    "jsonpath-ng>=1.6.0",
+    "pika>=1.3.0",
+]
+
+[project.scripts]
+payloadstash = "payload_stash.main:main"
+
+[tool.setuptools.packages.find]
+include = ["payload_stash", "payload_stash.*"]
+exclude = ["build*", "dist*", "*.egg-info*"]
