@@ -281,7 +281,7 @@ Extract values from a response and make them available to later requests via `$p
 |---|---|
 | `status` | HTTP status code (int) |
 | `duration_ms` | Request duration in milliseconds (int) |
-| `headers.<name>` | Response header value (lowercase key) |
+| `headers.<name>` | Response header value (name matched case-insensitively) |
 | `body` | Entire parsed response body |
 | `body.<field>` | Dot-notation path into parsed JSON |
 | `body[N].<field>` | Array index into parsed JSON |

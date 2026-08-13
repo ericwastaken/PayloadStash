@@ -18,6 +18,8 @@ import time
 import random
 
 import urllib3
+
+from .utility import CaseInsensitiveDict
 from urllib3 import exceptions as u3exc
 
 
@@ -88,8 +90,9 @@ class RequestManager:
         )
         try:
             status = int(resp.status)
-            # headers: HTTPHeaderDict -> convert to plain dict (last value wins)
-            resp_headers = {k: v for k, v in resp.headers.items()}
+            # headers: HTTPHeaderDict -> case-insensitive dict preserving the server's casing
+            # (last value wins). urllib3 keeps the original casing, so lookups must fold both sides.
+            resp_headers = CaseInsensitiveDict(resp.headers.items())
             data = resp.read() or b""
             try:
                 text = data.decode("utf-8", errors="replace")
@@ -170,7 +173,7 @@ class RequestManager:
         start = time.monotonic()
         last_exc: Optional[BaseException] = None
         status: int = -1
-        resp_headers: Dict[str, str] = {}
+        resp_headers: Dict[str, str] = CaseInsensitiveDict()
         resp_text: str = ""
 
         for attempt in range(1, attempts + 1):

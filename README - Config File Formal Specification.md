@@ -185,7 +185,7 @@ Schema:
 Supported path prefixes (plain string form):
 - `status` → HTTP status code (int)
 - `duration_ms` → request duration in milliseconds (int)
-- `headers.<name>` → response header value; `<name>` must be lowercase
+- `headers.<name>` → response header value; `<name>` is matched case-insensitively (`headers.etag`, `headers.ETag` and `headers.ETAG` are equivalent)
 - `body` → entire parsed response body
 - `body.<field>` → dot-notation path into parsed JSON body
 - `body[N].<field>` → array index `N` into parsed JSON body, then dot-notation field
