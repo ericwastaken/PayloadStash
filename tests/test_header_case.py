@@ -166,6 +166,7 @@ def _integration() -> bool:
         return text.count("✓") >= 6
     finally:
         srv.shutdown()
+        srv.server_close()
         shutil.rmtree(tmp, ignore_errors=True)
 
 
