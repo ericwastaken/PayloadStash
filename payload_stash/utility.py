@@ -13,6 +13,106 @@ class NoAliasDumper(yaml.SafeDumper):
         return True
 
 
+class CaseInsensitiveDict(dict):
+    """A dict with case-insensitive string key lookup that preserves original key casing.
+
+    HTTP header names are case-insensitive (RFC 9110), but urllib3 hands back the casing the
+    server actually sent. Storing headers in this mapping lets `headers.ETag`, `headers.etag`
+    and `headers.ETAG` all resolve, while logs and reports still show the original casing.
+
+    Duplicate keys differing only in case follow plain-dict semantics: the last one assigned
+    wins, matching the previous `{k: v for k, v in resp.headers.items()}` behavior.
+    """
+
+    @staticmethod
+    def _fold(key):
+        return key.lower() if isinstance(key, str) else key
+
+    def __init__(self, data=None, **kwargs):
+        super().__init__()
+        self._folded: dict = {}
+        if data:
+            for k, v in (data.items() if hasattr(data, "items") else data):
+                self[k] = v
+        for k, v in kwargs.items():
+            self[k] = v
+
+    def __setitem__(self, key, value):
+        folded = self._fold(key)
+        prior = self._folded.get(folded)
+        if prior is not None and prior != key:
+            # Replacing a key that differs only in case: drop the old spelling.
+            super().__delitem__(prior)
+        self._folded[folded] = key
+        super().__setitem__(key, value)
+
+    def __getitem__(self, key):
+        return super().__getitem__(self._folded.get(self._fold(key), key))
+
+    def __delitem__(self, key):
+        actual = self._folded.pop(self._fold(key), key)
+        super().__delitem__(actual)
+
+    def __contains__(self, key):
+        return self._fold(key) in self._folded
+
+    def get(self, key, default=None):
+        try:
+            return self[key]
+        except KeyError:
+            return default
+
+    def pop(self, key, *default):
+        try:
+            value = self[key]
+        except KeyError:
+            if default:
+                return default[0]
+            raise
+        del self[key]
+        return value
+
+    def setdefault(self, key, default=None):
+        if key in self:
+            return self[key]
+        self[key] = default
+        return default
+
+    def update(self, data=None, **kwargs):
+        if data:
+            for k, v in (data.items() if hasattr(data, "items") else data):
+                self[k] = v
+        for k, v in kwargs.items():
+            self[k] = v
+
+    def clear(self) -> None:
+        super().clear()
+        self._folded.clear()
+
+    def popitem(self):
+        key, value = super().popitem()
+        self._folded.pop(self._fold(key), None)
+        return key, value
+
+    def __ior__(self, other):
+        self.update(other)
+        return self
+
+    def copy(self) -> "CaseInsensitiveDict":
+        return CaseInsensitiveDict(self)
+
+
+# PyYAML dispatches representers by exact type, so a dict subclass needs its own or dumping
+# a headers mapping raises RepresenterError.
+def _represent_case_insensitive_dict(dumper, data):
+    return dumper.represent_dict(data)
+
+
+NoAliasDumper.add_representer(CaseInsensitiveDict, _represent_case_insensitive_dict)
+yaml.SafeDumper.add_representer(CaseInsensitiveDict, _represent_case_insensitive_dict)
+yaml.Dumper.add_representer(CaseInsensitiveDict, _represent_case_insensitive_dict)
+
+
 def write_log(log_file: PathLike, message: str, newline: bool = True) -> None:
     """
     Append a message to the specified log file, creating parent directories if necessary.

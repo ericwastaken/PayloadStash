@@ -190,7 +190,7 @@ class AmqpManager:
     @staticmethod
     def _props_to_headers(p) -> Dict[str, str]:
         """Project a received message's BasicProperties into a lowercase headers dict for
-        Capture/Expect/Match (resolve_response_path lowercases the `headers.` suffix)."""
+        Capture/Expect/Match (`headers.<name>` paths resolve case-insensitively)."""
         out: Dict[str, str] = {}
         if p is None:
             return out

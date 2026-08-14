@@ -197,6 +197,23 @@ def _navigate_path(obj: Any, path_rest: str) -> Any:
     return None
 
 
+def _lookup_header(headers: Dict[str, str], name: str) -> Any:
+    """Look up a response header case-insensitively (RFC 9110 header names are case-insensitive).
+
+    Response headers are normally a CaseInsensitiveDict, but plain dicts (e.g. AMQP Match
+    headers, or callers in tests) are handled here too by folding both sides.
+    """
+    if not isinstance(headers, dict):
+        return None
+    if name in headers:
+        return headers[name]
+    folded = name.lower()
+    for key, value in headers.items():
+        if isinstance(key, str) and key.lower() == folded:
+            return value
+    return None
+
+
 def resolve_response_path(path: Any, status: int, headers: Dict[str, str], body_text: str, duration_ms: int) -> Any:
     """Resolve a path string or $jsonpath operator against a response."""
     if isinstance(path, dict) and "$jsonpath" in path:
@@ -233,7 +250,7 @@ def resolve_response_path(path: Any, status: int, headers: Dict[str, str], body_
     if path == "duration_ms":
         return duration_ms
     if path.startswith("headers."):
-        return headers.get(path[len("headers."):].lower())
+        return _lookup_header(headers, path[len("headers."):])
     if path == "body":
         try:
             return _json_module.loads(body_text)

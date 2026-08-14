@@ -833,7 +833,7 @@ A `Capture` block on a request extracts values from the HTTP response into a run
 |------|-------------|
 | `status` | HTTP status code (int) |
 | `duration_ms` | Request duration in milliseconds (int) |
-| `headers.<name>` | Response header value; `<name>` must be lowercase |
+| `headers.<name>` | Response header value; `<name>` is matched case-insensitively |
 | `body` | Entire parsed response body |
 | `body.<field>` | Dot-notation path into parsed JSON body |
 | `body[N].<field>` | Array index `N` into parsed JSON, then dot-notation field |
