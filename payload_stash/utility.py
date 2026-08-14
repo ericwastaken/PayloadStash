@@ -85,6 +85,19 @@ class CaseInsensitiveDict(dict):
         for k, v in kwargs.items():
             self[k] = v
 
+    def clear(self) -> None:
+        super().clear()
+        self._folded.clear()
+
+    def popitem(self):
+        key, value = super().popitem()
+        self._folded.pop(self._fold(key), None)
+        return key, value
+
+    def __ior__(self, other):
+        self.update(other)
+        return self
+
     def copy(self) -> "CaseInsensitiveDict":
         return CaseInsensitiveDict(self)
 
