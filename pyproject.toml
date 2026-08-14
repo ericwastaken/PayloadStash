@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "payloadstash"
-version = "1.0.5"
+version = "1.1.0"
 description = "PayloadStash: YAML-driven HTTP fetch-and-stash for Python."
 readme = "README.md"
 requires-python = ">=3.8"
