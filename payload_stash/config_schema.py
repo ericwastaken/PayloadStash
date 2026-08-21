@@ -188,6 +188,8 @@ class HttpRequest(BaseModel):
     Method: Method
     # str, or a $secrets/$dynamic/$pattern operator (resolved like Headers/Body/Query)
     URLPath: Union[str, Dict[str, Any]]
+    # Optional per-request override of Defaults.URLRoot (same accepted forms)
+    URLRoot: Optional[Union[str, Dict[str, Any]]] = None
     Headers: Optional[Dict[str, Any]] = None
     Body: Optional[Dict[str, Any]] = None
     Query: Optional[Dict[str, Any]] = None
@@ -296,15 +298,18 @@ class StashConfig(BaseModel):
         # Enforce that Defaults.FlowControl has both fields (at least require presence, values validated by FlowControlCfg)
         if self.Defaults is None or self.Defaults.FlowControl is None:
             raise ValueError("Defaults.FlowControl is required with DelaySeconds and TimeoutSeconds integers")
-        # URLRoot is required only when at least one HTTP request is present.
-        has_http = any(
-            getattr(item.value, "Transport", "http") == "http"
+        # Defaults.URLRoot is required only when at least one HTTP request is present
+        # that does not define its own request-level URLRoot override.
+        def _blank(v: Any) -> bool:
+            return v is None or (isinstance(v, str) and not v.strip())
+
+        has_http_without_urlroot = any(
+            getattr(item.value, "Transport", "http") == "http" and _blank(getattr(item.value, "URLRoot", None))
             for seq in self.Sequences for item in seq.Requests
         )
-        if has_http:
-            _ur = self.Defaults.URLRoot
-            if _ur is None or (isinstance(_ur, str) and not _ur.strip()):
-                raise ValueError("Defaults.URLRoot is required (a non-empty string or a $secrets/$dynamic/$pattern value) when HTTP requests are present")
+        if has_http_without_urlroot:
+            if _blank(self.Defaults.URLRoot):
+                raise ValueError("Defaults.URLRoot is required (a non-empty string or a $secrets/$dynamic/$pattern value) when HTTP requests without their own URLRoot are present")
         return self
 
     @model_validator(mode='after')
@@ -848,8 +853,11 @@ def build_resolved_config_dict(cfg: TopLevelConfig, secrets: Optional[Dict[str, 
                 inner["Response"] = req.Response.model_dump(exclude_none=True)
             elif defaults is not None and defaults.Response is not None:
                 inner["Response"] = defaults.Response.model_dump(exclude_none=True)
-            # Always include effective URLRoot from Defaults (resolved like other sections)
-            if defaults and defaults.URLRoot is not None:
+            # Always include effective URLRoot: request-level override wins over Defaults
+            # (resolved like other sections)
+            if req.URLRoot is not None:
+                inner["URLRoot"] = _resolve_values(req.URLRoot, eff_dyn, secrets, redact_secrets, eff_cache)
+            elif defaults and defaults.URLRoot is not None:
                 inner["URLRoot"] = _resolve_values(defaults.URLRoot, eff_dyn, secrets, redact_secrets, eff_cache)
             # Include effective FlowControl (Defaults overridden by per-request)
             fc_eff: Dict[str, Any] = {}

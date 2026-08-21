@@ -355,6 +355,8 @@ StashConfig:
         - <RequestKey>:
             Method: <GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS>
             URLPath: <string>
+            # Optional per-request override of Defaults.URLRoot
+            URLRoot?: <string>
             Headers?: { <k>: <v>, ... }
             Body?:    { <k>: <v>, ... }
             Query?:   { <k>: <v>, ... }
@@ -677,7 +679,7 @@ PayloadStash computes each request’s **effective** sections in this order:
 2. If the request defines a section, copy it in.
 3. If the request omits a section, copy from **Defaults**.
 4. **Forced** is merged last and overrides.
-5. `URLRoot` comes from Defaults only. It is not allowed inside a Request.
+5. `URLRoot` comes from Defaults, unless the Request defines its own `URLRoot`, which overrides Defaults for that request only.
 
 Example: If `Defaults.Body.team = "blue"`, `Request.Body.team` omitted, and `Forced.Body.team = "green"`, 
 then `team == "green"`.
@@ -1161,12 +1163,12 @@ Exit codes:
 ## Validation Rules
 
 * `StashConfig.Name` required.
-* `StashConfig.Defaults.URLRoot` required.
+* `StashConfig.Defaults.URLRoot` required when at least one HTTP request does not define its own `URLRoot`.
 * `StashConfig.Defaults.FlowControl` required (must include DelaySeconds and TimeoutSeconds).
 * At least one sequence.
 * Each sequence must have Name, Type, and at least one Request.
 * Each request must have one key, Method, and URLPath.
-* URLRoot is not allowed inside a Request.
+* A Request may define its own `URLRoot` to override `Defaults.URLRoot` for that request.
 * Headers, Body, Query must be maps.
 * ConcurrencyLimit is only allowed for Type=Concurrent and must be >0 if present.
 

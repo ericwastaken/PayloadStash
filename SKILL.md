@@ -92,6 +92,7 @@ Sequences:
       - RequestKey:           # unique within this sequence; used in filenames and reports
           Method: POST        # GET | POST | PUT | PATCH | DELETE | HEAD | OPTIONS
           URLPath: /v1/thing  # appended to URLRoot; supports operators incl. ${captured:KEY}
+          URLRoot: ...        # optional; overrides Defaults.URLRoot for this request only
           Headers: ...        # optional; overrides Defaults.Headers
           Body: ...           # optional; overrides Defaults.Body
           Query: ...          # optional; overrides Defaults.Query
@@ -572,7 +573,7 @@ Sequences:
           Expect: [ { status: 200 } ]
 ```
 
-**`Defaults`/`Forced` for AMQP:** the `AMQP` block merges like `Headers` (request over Defaults, Forced last; `Properties.Headers` is deep-merged). HTTP-only sections (`URLRoot`, `Headers`, `Query`, `InsecureTLS`, `Response`) do not apply to AMQP requests; `Body`, `Retry`, and `FlowControl` are shared. `URLRoot` is required only when the config contains an HTTP request. `Retry` on an AMQP request retries connection/network errors only — a `nack`/`unroutable` is a broker decision, not retried.
+**`Defaults`/`Forced` for AMQP:** the `AMQP` block merges like `Headers` (request over Defaults, Forced last; `Properties.Headers` is deep-merged). HTTP-only sections (`URLRoot`, `Headers`, `Query`, `InsecureTLS`, `Response`) do not apply to AMQP requests; `Body`, `Retry`, and `FlowControl` are shared. `Defaults.URLRoot` is required only when the config contains an HTTP request without its own request-level `URLRoot`. `Retry` on an AMQP request retries connection/network errors only — a `nack`/`unroutable` is a broker decision, not retried.
 
 ---
 
@@ -893,7 +894,7 @@ payloadstash run amqp-signals.yml --out ./output --secrets secrets.env
 ## Validation Rules (errors to avoid)
 
 - `StashConfig.Name` must be non-empty.
-- `Defaults.URLRoot` must be non-empty (no trailing slash) when the config has HTTP requests; it may be omitted for AMQP-only configs. It may be a plain string or a `$secrets`/`$dynamic`/`$pattern` operator (same as `URLPath`).
+- `Defaults.URLRoot` must be non-empty (no trailing slash) when the config has HTTP requests that do not define their own request-level `URLRoot`; it may be omitted for AMQP-only configs or when every HTTP request carries its own `URLRoot`. It may be a plain string or a `$secrets`/`$dynamic`/`$pattern` operator (same as `URLPath`). An HTTP request may set `URLRoot` to override `Defaults.URLRoot` for that request only.
 - `Defaults.FlowControl` with both `DelaySeconds` and `TimeoutSeconds` is required.
 - `Sequence.Name` values must be unique across all sequences.
 - Request keys must be unique within each sequence.

@@ -102,6 +102,63 @@ StashConfig:
     except Exception:
         check("missing URLRoot w/ HTTP rejected", True)
 
+    # request-level URLRoot overrides Defaults.URLRoot
+    y = """
+StashConfig:
+  Name: t
+  Defaults: { URLRoot: https://default.example.com, FlowControl: { DelaySeconds: 0, TimeoutSeconds: 5 } }
+  Sequences:
+    - Name: s
+      Type: Sequential
+      Requests:
+        - { a: { Method: GET, URLPath: /x, URLRoot: https://override.example.com } }
+        - { b: { Method: GET, URLPath: /y } }
+"""
+    check("request URLRoot overrides Defaults", _req(y, i=0)["URLRoot"] == "https://override.example.com")
+    check("request w/o URLRoot inherits Defaults", _req(y, i=1)["URLRoot"] == "https://default.example.com")
+
+    # request-level URLRoot supports operators ($secrets)
+    y = """
+StashConfig:
+  Name: t
+  Defaults: { URLRoot: https://default.example.com, FlowControl: { DelaySeconds: 0, TimeoutSeconds: 5 } }
+  Sequences:
+    - {Name: s, Type: Sequential, Requests: [ { a: { Method: GET, URLPath: /x, URLRoot: { $secrets: H } } } ]}
+"""
+    check("request URLRoot $secrets (actual)", _req(y, secrets={"H": "https://real"})["URLRoot"] == "https://real")
+    check("request URLRoot $secrets (redacted)", _req(y, secrets={"H": "https://real"}, redact=True)["URLRoot"] == "***REDACTED***")
+
+    # Defaults.URLRoot may be omitted when every HTTP request has its own URLRoot
+    all_own = """
+StashConfig:
+  Name: t
+  Defaults: { FlowControl: { DelaySeconds: 0, TimeoutSeconds: 5 } }
+  Sequences:
+    - {Name: s, Type: Sequential, Requests: [ { a: { Method: GET, URLPath: /x, URLRoot: https://own.example.com } } ]}
+"""
+    try:
+        validate_config_data(yaml.safe_load(all_own)); check("Defaults.URLRoot omitted OK when all requests have URLRoot", True)
+    except Exception:
+        check("Defaults.URLRoot omitted OK when all requests have URLRoot", False)
+    check("all-own URLRoot resolves", _req(all_own)["URLRoot"] == "https://own.example.com")
+
+    # ...but still rejected when any HTTP request lacks its own URLRoot
+    mixed_missing = """
+StashConfig:
+  Name: t
+  Defaults: { FlowControl: { DelaySeconds: 0, TimeoutSeconds: 5 } }
+  Sequences:
+    - Name: s
+      Type: Sequential
+      Requests:
+        - { a: { Method: GET, URLPath: /x, URLRoot: https://own.example.com } }
+        - { b: { Method: GET, URLPath: /y } }
+"""
+    try:
+        validate_config_data(yaml.safe_load(mixed_missing)); check("missing URLRoot for uncovered request rejected", False)
+    except Exception:
+        check("missing URLRoot for uncovered request rejected", True)
+
     total, passed = len(_results), sum(_results)
     print("\n%d/%d passed — %s" % (passed, total, "ALL GREEN" if passed == total else "RED"))
     sys.exit(0 if passed == total else 1)
