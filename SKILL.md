@@ -1,4 +1,9 @@
-# Skill: Write a PayloadStash Config File
+---
+name: payloadstash
+description: Create, edit, and validate PayloadStash YAML configurations for HTTP and AMQP workflows.
+---
+
+# Write a PayloadStash Config File
 
 Use this skill when asked to create, edit, or extend a PayloadStash YAML config file.
 
@@ -633,6 +638,29 @@ dynamics:
       template: "${choice:hosts}"
   sets:
     hosts: ["https://stage.api.example.com", "https://prod.api.example.com"]
+```
+
+### Use a different URL root per request
+
+Set `URLRoot` directly on an HTTP request to override `Defaults.URLRoot` for that request. If every HTTP request supplies its own root, `Defaults.URLRoot` may be omitted. The override also accepts the same value operators as the default root.
+
+```yaml
+StashConfig:
+  Name: MultiServiceHealth
+  Defaults:
+    FlowControl: { DelaySeconds: 0, TimeoutSeconds: 10 }
+  Sequences:
+    - Name: CheckServices
+      Type: Sequential
+      Requests:
+        - CheckAccounts:
+            Method: GET
+            URLRoot: https://accounts.example.com
+            URLPath: /health
+        - CheckOrders:
+            Method: GET
+            URLRoot: { $secrets: ORDERS_URL_ROOT }
+            URLPath: /health
 ```
 
 ### Disable retry for one request

@@ -11,6 +11,8 @@ PayloadStash separates end-user documentation from repository-facing developer a
 | Change affecting both audiences | Update each source for its audience, keep terminology and links aligned, and avoid copying the same guide into both |
 | Configuration/model change | Update `docs/reference/configuration.md`, affected `docs/configuration/` topics, and `config/config-example.yml` when an executable example should change; update developer docs only for implementation/maintenance impact |
 | CLI change | Update `docs/reference/cli.md`, affected workflows/examples, and repository developer notes only if development commands change |
+| Behavior used by agents to author or run configurations | Update `SKILL.md` alongside the applicable user guide and executable examples; keep its front matter, field rules, command forms, and complete examples current |
+| Agent-skill installation or discovery change | Update `docs/agent-skill.md`, its home-page/navigation links, and the install location or download URL shown there |
 | Distribution change | Put artifact-production details in the relevant packaged README and artifact-consumption instructions in `docs/install/` |
 | Branding or navigation change | Update `mkdocs.yml`, `docs/assets/` or site styling, and repository links where applicable |
 
@@ -20,6 +22,7 @@ PayloadStash separates end-user documentation from repository-facing developer a
 - `README.md` is a concise project/developer entry point and links users to GitHub Pages.
 - `packaged-python/README - Python Version.md` and `packaged-docker/README - Docker Version.md` describe producing and maintaining artifacts, not using PayloadStash.
 - `config/config-example.yml` remains the canonical executable sample; `config/README.md` explains sample-file maintenance.
+- `SKILL.md` is the installable agent instruction source. It complements the end-user site and must reflect current schema, operator, transport, CLI, and output behavior rather than becoming a stale second specification.
 - Generated `site/` HTML is an artifact and must not be committed.
 - Do not document a PyPI installation unless the project is actually published there and the maintainer explicitly adds that channel.
 
@@ -33,6 +36,6 @@ python3 -m venv .venv-docs
 .venv-docs/bin/mkdocs build --strict
 ```
 
-Also compare changed commands with `payloadstash --help` and the affected subcommand help. Validate modified YAML examples with the current CLI or schema tests. Run relevant application tests when documentation reflects behavior that changed in code.
+Also compare changed commands with `payloadstash --help` and the affected subcommand help. Validate modified YAML examples with the current CLI or schema tests. When behavior covered by `SKILL.md` changes, review and update it in the same change, validate its complete YAML examples, and run the focused behavior tests (for example, `tests/test_url_operators.py` for `URLRoot`). Run relevant application tests when documentation reflects behavior that changed in code.
 
 For developer-only documentation, run only checks meaningful to the underlying change. When a change spans audiences, validate both the user site and the affected implementation or packaging workflow.

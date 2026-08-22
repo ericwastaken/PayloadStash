@@ -6,6 +6,10 @@ PayloadStash sends HTTP and AMQP payloads from declarative YAML, captures values
 
 [Choose an installation](install/index.md){ .md-button .md-button--primary }
 [Create your first configuration](getting-started/first-config.md){ .md-button }
+[Install the agent skill](agent-skill.md){ .md-button }
+
+!!! tip "Let your coding agent write PayloadStash configurations"
+    Download the [PayloadStash agent skill](agent-skill.md) to give a compatible agent current configuration, HTTP, AMQP, capture, expectation, and CLI guidance.
 
 ## Find what you need
 
@@ -42,6 +46,14 @@ PayloadStash sends HTTP and AMQP payloads from declarative YAML, captures values
     Diagnose installation, configuration, connection, and output issues.
 
     [Troubleshooting](troubleshooting.md)
+
+-   :material-robot: **Equip an AI agent**
+
+    ---
+
+    Install the PayloadStash skill so an agent can create and update configurations with current syntax.
+
+    [Install the agent skill](agent-skill.md)
 
 </div>
 

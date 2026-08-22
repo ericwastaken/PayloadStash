@@ -64,6 +64,7 @@ extra_css:
 
 nav:
   - Home: index.md
+  - AI agent skill: agent-skill.md
   - Installation:
       - Choose an installation: install/index.md
       - Local bootstrap: install/local-bootstrap.md
