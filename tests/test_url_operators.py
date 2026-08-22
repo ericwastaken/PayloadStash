@@ -28,6 +28,14 @@ def _req(y, secrets=None, redact=False, seq=0, i=0):
     return next(iter(item.values()))
 
 
+def _rejected(y):
+    try:
+        validate_config_data(yaml.safe_load(y))
+        return False
+    except Exception:
+        return True
+
+
 def run():
     # URLRoot via $dynamic (resolve-time)
     y = """
@@ -158,6 +166,45 @@ StashConfig:
         validate_config_data(yaml.safe_load(mixed_missing)); check("missing URLRoot for uncovered request rejected", False)
     except Exception:
         check("missing URLRoot for uncovered request rejected", True)
+
+    # Invalid request overrides must not bypass Defaults.URLRoot coverage or
+    # override a valid default with an unusable value.
+    invalid_request_roots = [
+        '""',
+        '"   "',
+        '{}',
+        '{ foo: bar }',
+        '{ $unknown: value }',
+    ]
+    for invalid_root in invalid_request_roots:
+        y = f"""
+StashConfig:
+  Name: t
+  Defaults: {{ URLRoot: https://default.example.com, FlowControl: {{ DelaySeconds: 0, TimeoutSeconds: 5 }} }}
+  Sequences:
+    - {{Name: s, Type: Sequential, Requests: [ {{ a: {{ Method: GET, URLPath: /x, URLRoot: {invalid_root} }} }} ]}}
+"""
+        check(f"invalid request URLRoot rejected: {invalid_root}", _rejected(y))
+
+    # Defaults.URLRoot uses the same validation as request-level overrides.
+    invalid_default = """
+StashConfig:
+  Name: t
+  Defaults: { URLRoot: {}, FlowControl: { DelaySeconds: 0, TimeoutSeconds: 5 } }
+  Sequences:
+    - {Name: s, Type: Sequential, Requests: [ { a: { Method: GET, URLPath: /x } } ]}
+"""
+    check("invalid Defaults.URLRoot operator rejected", _rejected(invalid_default))
+
+    # Supported timestamp forms remain valid operator objects.
+    timestamp_root = """
+StashConfig:
+  Name: t
+  Defaults: { URLRoot: { $func: timestamp, format: epoch_s }, FlowControl: { DelaySeconds: 0, TimeoutSeconds: 5 } }
+  Sequences:
+    - {Name: s, Type: Sequential, Requests: [ { a: { Method: GET, URLPath: /x } } ]}
+"""
+    check("supported URLRoot $func operator accepted", not _rejected(timestamp_root))
 
     total, passed = len(_results), sum(_results)
     print("\n%d/%d passed — %s" % (passed, total, "ALL GREEN" if passed == total else "RED"))

@@ -147,6 +147,72 @@ class FlowControlCfg(BaseModel):
     TimeoutSeconds: Optional[int] = Field(None, ge=0)
 
 
+_URLROOT_OPERATOR_KEYS = {
+    "$secrets": {"$secrets"},
+    "$dynamic": {"$dynamic", "when"},
+    "$pattern": {"$pattern"},
+    "$timestamp": {"$timestamp", "when"},
+    "$func": {"$func", "format", "fmt", "when"},
+}
+
+
+def _validate_urlroot(value: Optional[Union[str, Dict[str, Any]]]) -> Optional[Union[str, Dict[str, Any]]]:
+    """Validate an authored URLRoot string or special-operator mapping."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        if not value.strip():
+            raise ValueError("URLRoot must be a non-blank string")
+        return value
+    if not isinstance(value, dict):
+        raise ValueError("URLRoot must be a string or supported operator mapping")
+
+    operator_keys = [
+        key for key in value
+        if isinstance(key, str) and key.startswith("$")
+    ]
+    if len(operator_keys) != 1 or operator_keys[0] not in _URLROOT_OPERATOR_KEYS:
+        raise ValueError(
+            "URLRoot must contain exactly one supported operator: "
+            "$secrets, $dynamic, $pattern, $timestamp, or $func"
+        )
+
+    operator = operator_keys[0]
+    unexpected = set(value) - _URLROOT_OPERATOR_KEYS[operator]
+    if unexpected:
+        raise ValueError(
+            f"URLRoot operator {operator} has unsupported keys: {sorted(str(key) for key in unexpected)}"
+        )
+
+    operand = value[operator]
+    if operator in {"$secrets", "$dynamic", "$pattern"}:
+        if not isinstance(operand, str) or not operand.strip():
+            raise ValueError(f"URLRoot {operator} value must be a non-blank string")
+    elif operator == "$func":
+        if operand != "timestamp":
+            raise ValueError("URLRoot $func only supports the timestamp function")
+    elif operator == "$timestamp" and operand is not None:
+        if not isinstance(operand, (str, dict)):
+            raise ValueError("URLRoot $timestamp value must be a format string or mapping")
+        if isinstance(operand, dict):
+            nested_unexpected = set(operand) - {"format", "fmt", "when"}
+            if nested_unexpected:
+                raise ValueError(
+                    "URLRoot $timestamp has unsupported keys: "
+                    f"{sorted(str(key) for key in nested_unexpected)}"
+                )
+
+    timing_values = []
+    if "when" in value:
+        timing_values.append(value["when"])
+    if operator == "$timestamp" and isinstance(operand, dict) and "when" in operand:
+        timing_values.append(operand["when"])
+    if any(when not in {"resolve", "request"} for when in timing_values):
+        raise ValueError("URLRoot operator 'when' must be 'resolve' or 'request'")
+
+    return value
+
+
 class DefaultsSection(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
@@ -163,6 +229,11 @@ class DefaultsSection(BaseModel):
     RetryCfg: Optional[Retry] = Field(None, alias='Retry')
     Response: Optional[ResponseCfg] = None
     AMQP: Optional[AmqpSection] = None
+
+    @field_validator('URLRoot')
+    @classmethod
+    def validate_urlroot(cls, value):
+        return _validate_urlroot(value)
 
 
 class ForcedSection(BaseModel):
@@ -200,6 +271,11 @@ class HttpRequest(BaseModel):
     Capture: Optional[Dict[str, Any]] = None
     Expect: Optional[List[Dict[str, Any]]] = None
     dynamics: Optional[Dynamics] = None
+
+    @field_validator('URLRoot')
+    @classmethod
+    def validate_urlroot(cls, value):
+        return _validate_urlroot(value)
 
 
 class AmqpRequest(BaseModel):
@@ -298,18 +374,15 @@ class StashConfig(BaseModel):
         # Enforce that Defaults.FlowControl has both fields (at least require presence, values validated by FlowControlCfg)
         if self.Defaults is None or self.Defaults.FlowControl is None:
             raise ValueError("Defaults.FlowControl is required with DelaySeconds and TimeoutSeconds integers")
-        # Defaults.URLRoot is required only when at least one HTTP request is present
-        # that does not define its own request-level URLRoot override.
-        def _blank(v: Any) -> bool:
-            return v is None or (isinstance(v, str) and not v.strip())
-
+        # URLRoot field validators reject malformed explicit values, so coverage only
+        # needs to distinguish an omitted request override from a provided one.
         has_http_without_urlroot = any(
-            getattr(item.value, "Transport", "http") == "http" and _blank(getattr(item.value, "URLRoot", None))
+            getattr(item.value, "Transport", "http") == "http"
+            and getattr(item.value, "URLRoot", None) is None
             for seq in self.Sequences for item in seq.Requests
         )
-        if has_http_without_urlroot:
-            if _blank(self.Defaults.URLRoot):
-                raise ValueError("Defaults.URLRoot is required (a non-empty string or a $secrets/$dynamic/$pattern value) when HTTP requests without their own URLRoot are present")
+        if has_http_without_urlroot and self.Defaults.URLRoot is None:
+            raise ValueError("Defaults.URLRoot is required (a non-empty string or a $secrets/$dynamic/$pattern value) when HTTP requests without their own URLRoot are present")
         return self
 
     @model_validator(mode='after')
