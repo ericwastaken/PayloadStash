@@ -1,0 +1,96 @@
+site_name: PayloadStash
+site_description: Send, capture, and validate HTTP and AMQP payloads from declarative YAML.
+site_url: https://ericwastaken.github.io/PayloadStash/
+repo_url: https://github.com/ericwastaken/PayloadStash
+repo_name: ericwastaken/PayloadStash
+edit_uri: edit/main/docs/
+site_dir: site
+
+theme:
+  name: material
+  logo: assets/PayloadStash-InfoGraphic.png
+  favicon: assets/PayloadStash-InfoGraphic.png
+  features:
+    - content.action.edit
+    - content.code.copy
+    - content.code.select
+    - navigation.footer
+    - navigation.indexes
+    - navigation.instant
+    - navigation.sections
+    - navigation.top
+    - search.highlight
+    - search.share
+    - search.suggest
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: deep purple
+      accent: amber
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: deep purple
+      accent: amber
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
+  - toc:
+      permalink: true
+
+extra_css:
+  - stylesheets/extra.css
+
+nav:
+  - Home: index.md
+  - Installation:
+      - Choose an installation: install/index.md
+      - Local bootstrap: install/local-bootstrap.md
+      - Cloned repository with UV: install/cloned-uv.md
+      - GitHub install with UV: install/git-uv-tool.md
+      - GHCR Docker image: install/docker.md
+  - Getting started:
+      - First configuration: getting-started/first-config.md
+      - Validate, resolve, and run: getting-started/run.md
+      - Your first result: getting-started/results.md
+  - Configuration:
+      - Core structure: configuration/index.md
+      - HTTP requests: configuration/http.md
+      - AMQP requests: configuration/amqp.md
+      - Defaults and forced values: configuration/precedence.md
+      - Secrets and dynamic values: configuration/secrets-and-dynamic-values.md
+      - Sequencing, concurrency, and retries: configuration/execution.md
+      - Capture values: configuration/capture.md
+      - Expectations: configuration/expectations.md
+  - Examples:
+      - Examples overview: examples/index.md
+      - HTTP workflow: examples/http-workflow.md
+      - AMQP workflow: examples/amqp-workflow.md
+  - Reference:
+      - CLI and exit codes: reference/cli.md
+      - Output and reports: reference/output.md
+      - Configuration schema: reference/configuration.md
+  - Troubleshooting: troubleshooting.md
+
+copyright: Copyright &copy; PayloadStash contributors

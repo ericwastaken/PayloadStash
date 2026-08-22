@@ -1,0 +1,16 @@
+:root {
+  --md-primary-fg-color: #5b2d90;
+  --md-primary-fg-color--light: #7445a6;
+  --md-primary-fg-color--dark: #44206f;
+}
+
+.md-typeset img.hero {
+  display: block;
+  margin: 1rem auto 2rem;
+  max-height: 15rem;
+  object-fit: contain;
+}
+
+.md-typeset .grid.cards > ul > li {
+  border-radius: 0.5rem;
+}
