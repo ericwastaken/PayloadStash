@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import textwrap
 import yaml
 from pathlib import Path
 
@@ -49,20 +50,20 @@ def _dry_run(y, secrets_text=None, null_request_root=False, request_root_express
         if null_request_root:
             request_root_expression = "None"
         if request_root_expression is not None:
-            program = f"""
-import payload_stash.main as app
+            program = textwrap.dedent(f"""
+                import payload_stash.main as app
 
-original_build = app.build_resolved_config_dict
+                original_build = app.build_resolved_config_dict
 
-def build_with_injected_request_root(*args, **kwargs):
-    resolved = original_build(*args, **kwargs)
-    request = next(iter(resolved["StashConfig"]["Sequences"][0]["Requests"][0].values()))
-    request["URLRoot"] = {request_root_expression}
-    return resolved
+                def build_with_injected_request_root(*args, **kwargs):
+                    resolved = original_build(*args, **kwargs)
+                    request = next(iter(resolved["StashConfig"]["Sequences"][0]["Requests"][0].values()))
+                    request["URLRoot"] = {request_root_expression}
+                    return resolved
 
-app.build_resolved_config_dict = build_with_injected_request_root
-app.main()
-"""
+                app.build_resolved_config_dict = build_with_injected_request_root
+                app.main()
+            """)
         command = [
             sys.executable, "-c", program,
             "run", str(config), "--out", str(tmp / "out"), "--dry-run", "--yes",
