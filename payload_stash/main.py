@@ -601,15 +601,13 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool, secrets: Path | N
                     # ($secrets/$dynamic/$timestamp/$pattern, incl. ${captured:KEY} at request time).
                     # The resolved request carries its effective URLRoot (request-level override,
                     # else Defaults); fall back to Defaults.URLRoot for older resolved configs.
-                    url_root_eff = r_val.get("URLRoot")
-                    if url_root_eff is None:
-                        url_root_eff = url_root
+                    url_root_eff = r_val["URLRoot"] if "URLRoot" in r_val else url_root
                     url_root_res = resolve_deferred(url_root_eff, secrets=secrets_map, captures=caps_snap)
                     url_path_res = resolve_deferred(url_path_raw, secrets=secrets_map, captures=caps_snap)
                     if url_root_res is None or (isinstance(url_root_res, str) and not url_root_res.strip()):
                         raise ValueError(
                             f"Request '{r_key}' resolved URLRoot to an invalid value; "
-                            "expected a non-blank string"
+                            "expected a non-null, non-blank value"
                         )
                     url_root_str = str(url_root_res)
                     url_path_str = url_path_res if isinstance(url_path_res, str) else ("" if url_path_res is None else str(url_path_res))
