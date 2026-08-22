@@ -1,4 +1,4 @@
-"""URLRoot / URLPath operator support ($secrets, $dynamic, $pattern, inline secrets, ${captured}).
+"""URLRoot / URLPath operator support ($secrets, $dynamic, $pattern, $timestamp, $func).
 
 Plain-script style (matching tests/test_asserts.py). Run:
     .venv/bin/python tests/test_url_operators.py
@@ -40,25 +40,27 @@ def _rejected(y):
         return True
 
 
-def _dry_run(y, secrets_text=None, null_request_root=False):
+def _dry_run(y, secrets_text=None, null_request_root=False, request_root_expression=None):
     tmp = Path(tempfile.mkdtemp(prefix="ps-url-operators-"))
     try:
         config = tmp / "config.yml"
         config.write_text(y, encoding="utf-8")
         program = "from payload_stash.main import main; main()"
         if null_request_root:
-            program = """
+            request_root_expression = "None"
+        if request_root_expression is not None:
+            program = f"""
 import payload_stash.main as app
 
 original_build = app.build_resolved_config_dict
 
-def build_with_null_request_root(*args, **kwargs):
+def build_with_injected_request_root(*args, **kwargs):
     resolved = original_build(*args, **kwargs)
     request = next(iter(resolved["StashConfig"]["Sequences"][0]["Requests"][0].values()))
-    request["URLRoot"] = None
+    request["URLRoot"] = {request_root_expression}
     return resolved
 
-app.build_resolved_config_dict = build_with_null_request_root
+app.build_resolved_config_dict = build_with_injected_request_root
 app.main()
 """
         command = [
@@ -259,6 +261,16 @@ StashConfig:
         '{ $timestamp: { format: epoch_s, extra: true } }',
         '{ $timestamp: epoch_s, when: later }',
         '{ $secrets: H, $timestamp: epoch_s }',
+        '{ $timestamp: "" }',
+        '{ $timestamp: unsupported }',
+        '{ $timestamp: { format: [] } }',
+        '{ $timestamp: { format: null } }',
+        '{ $timestamp: { format: epoch_s, fmt: iso_8601 } }',
+        '{ $timestamp: { format: epoch_s, when: request }, when: resolve }',
+        '{ $func: timestamp, format: [] }',
+        '{ $func: timestamp, format: null }',
+        '{ $func: timestamp, format: unsupported }',
+        '{ $func: timestamp, format: epoch_s, fmt: iso_8601 }',
     ]
     for invalid_root in invalid_request_roots:
         y = f"""
@@ -278,6 +290,38 @@ StashConfig:
     - {{Name: s, Type: Sequential, Requests: [ {{ a: {{ Method: GET, URLPath: /x }} }} ]}}
 """
         check(f"invalid Defaults.URLRoot rejected: {invalid_root}", _rejected(y))
+
+    # Explicit null is not an override and must be rejected rather than inheriting Defaults.URLRoot.
+    authored_null_root = """
+StashConfig:
+  Name: t
+  Defaults: { URLRoot: https://default.example.com, FlowControl: { DelaySeconds: 0, TimeoutSeconds: 5 } }
+  Sequences:
+    - {Name: s, Type: Sequential, Requests: [ { a: { Method: GET, URLPath: /x, URLRoot: null } } ]}
+"""
+    try:
+        validate_config_data(yaml.safe_load(authored_null_root))
+        check("authored null request URLRoot rejected", False)
+    except Exception as exc:
+        check("authored null request URLRoot rejected", "URLRoot cannot be null" in str(exc))
+
+    # Default timestamp syntax and the fmt alias remain accepted while malformed options are rejected.
+    valid_timestamp_options = (
+        '{ $timestamp: null }',
+        '{ $timestamp: {} }',
+        '{ $timestamp: epoch_s }',
+        '{ $func: timestamp }',
+        '{ $func: timestamp, fmt: epoch_s }',
+    )
+    for valid_root in valid_timestamp_options:
+        y = f"""
+StashConfig:
+  Name: t
+  Defaults: {{ URLRoot: {valid_root}, FlowControl: {{ DelaySeconds: 0, TimeoutSeconds: 5 }} }}
+  Sequences:
+    - {{Name: s, Type: Sequential, Requests: [ {{ a: {{ Method: GET, URLPath: /x }} }} ]}}
+"""
+        check(f"valid timestamp URLRoot accepted: {valid_root}", not _rejected(y))
 
     # Both timestamp operator forms produce integer roots at either scope and
     # pass request processing through string conversion.
@@ -360,6 +404,14 @@ StashConfig:
         "explicit null request URLRoot rejected without default fallback",
         "Operation Cancelled" in proc.stdout and "URL:" not in logs,
     )
+
+    # Corrupt or unknown deferred values must not be stringified into malformed container URLs.
+    for root_expression in ("{}", "[]"):
+        proc, logs = _dry_run(explicit_null_root, request_root_expression=root_expression)
+        check(
+            f"resolved container URLRoot rejected: {root_expression}",
+            "Operation Cancelled" in proc.stdout and "URL:" not in logs,
+        )
 
     total, passed = len(_results), sum(_results)
     print("\n%d/%d passed — %s" % (passed, total, "ALL GREEN" if passed == total else "RED"))

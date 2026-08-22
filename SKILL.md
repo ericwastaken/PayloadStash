@@ -41,7 +41,7 @@ Top-level keys outside `StashConfig` and `dynamics` are ignored by the parser â€
 
 ```yaml
 Defaults:
-  URLRoot: https://api.example.com   # required for HTTP, no trailing slash; supports $secrets/$dynamic/$pattern
+  URLRoot: https://api.example.com   # uncovered HTTP; supports $secrets/$dynamic/$pattern/$timestamp/$func
   FlowControl:                        # required
     DelaySeconds: 0                   # int >= 0
     TimeoutSeconds: 30                # int >= 0
@@ -894,7 +894,7 @@ payloadstash run amqp-signals.yml --out ./output --secrets secrets.env
 ## Validation Rules (errors to avoid)
 
 - `StashConfig.Name` must be non-empty.
-- `Defaults.URLRoot` must be non-empty (no trailing slash) when the config has HTTP requests that do not define their own request-level `URLRoot`; it may be omitted for AMQP-only configs or when every HTTP request carries its own `URLRoot`. It may be a plain string or a `$secrets`/`$dynamic`/`$pattern` operator (same as `URLPath`). An HTTP request may set `URLRoot` to override `Defaults.URLRoot` for that request only.
+- `Defaults.URLRoot` must be non-empty when the config has HTTP requests that do not define their own request-level `URLRoot`; it may be omitted for AMQP-only configs or when every HTTP request carries its own `URLRoot`. It may be a plain string or a `$secrets`/`$dynamic`/`$pattern`/`$timestamp`/`$func: timestamp` operator (same as `URLPath`). An HTTP request may set a non-null `URLRoot` to override `Defaults.URLRoot` for that request only; omission inherits the default.
 - `Defaults.FlowControl` with both `DelaySeconds` and `TimeoutSeconds` is required.
 - `Sequence.Name` values must be unique across all sequences.
 - Request keys must be unique within each sequence.

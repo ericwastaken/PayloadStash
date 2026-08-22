@@ -1168,7 +1168,7 @@ Exit codes:
 * At least one sequence.
 * Each sequence must have Name, Type, and at least one Request.
 * Each request must have one key, Method, and URLPath.
-* A Request may define its own `URLRoot` to override `Defaults.URLRoot` for that request.
+* A Request may define a non-blank string or supported operator as its own `URLRoot` to override `Defaults.URLRoot` for that request; explicit null is invalid, while omission inherits the default.
 * Headers, Body, Query must be maps.
 * ConcurrencyLimit is only allowed for Type=Concurrent and must be >0 if present.
 

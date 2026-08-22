@@ -154,6 +154,20 @@ _URLROOT_OPERATOR_KEYS = {
     "$timestamp": {"$timestamp", "when"},
     "$func": {"$func", "format", "fmt", "when"},
 }
+_URLROOT_TIMESTAMP_FORMATS = {"epoch_ms", "epoch_s", "iso_8601"}
+
+
+def _validate_urlroot_timestamp_options(options: Dict[str, Any], operator: str) -> None:
+    if "format" in options and "fmt" in options:
+        raise ValueError(f"URLRoot {operator} must not specify both 'format' and 'fmt'")
+    format_key = "format" if "format" in options else "fmt" if "fmt" in options else None
+    format_value = options[format_key] if format_key is not None else None
+    if format_key is not None and (
+        not isinstance(format_value, str)
+        or format_value not in _URLROOT_TIMESTAMP_FORMATS
+    ):
+        supported = ", ".join(sorted(_URLROOT_TIMESTAMP_FORMATS))
+        raise ValueError(f"URLRoot {operator} format must be one of: {supported}")
 
 
 def _validate_urlroot(value: Optional[Union[str, Dict[str, Any]]]) -> Optional[Union[str, Dict[str, Any]]]:
@@ -191,9 +205,13 @@ def _validate_urlroot(value: Optional[Union[str, Dict[str, Any]]]) -> Optional[U
     elif operator == "$func":
         if operand != "timestamp":
             raise ValueError("URLRoot $func only supports the timestamp function")
+        _validate_urlroot_timestamp_options(value, "$func")
     elif operator == "$timestamp" and operand is not None:
         if not isinstance(operand, (str, dict)):
             raise ValueError("URLRoot $timestamp value must be a format string or mapping")
+        if isinstance(operand, str) and operand not in _URLROOT_TIMESTAMP_FORMATS:
+            supported = ", ".join(sorted(_URLROOT_TIMESTAMP_FORMATS))
+            raise ValueError(f"URLRoot $timestamp format must be one of: {supported}")
         if isinstance(operand, dict):
             nested_unexpected = set(operand) - {"format", "fmt", "when"}
             if nested_unexpected:
@@ -201,6 +219,9 @@ def _validate_urlroot(value: Optional[Union[str, Dict[str, Any]]]) -> Optional[U
                     "URLRoot $timestamp has unsupported keys: "
                     f"{sorted(str(key) for key in nested_unexpected)}"
                 )
+            _validate_urlroot_timestamp_options(operand, "$timestamp")
+            if "when" in value and "when" in operand:
+                raise ValueError("URLRoot $timestamp must specify 'when' only once")
 
     timing_values = []
     if "when" in value:
@@ -217,7 +238,7 @@ class DefaultsSection(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
     # URLRoot is required only when at least one HTTP request is present (enforced in StashConfig).
-    # May be a string, or a $secrets/$dynamic/$pattern operator (resolved like Headers/Body/Query).
+    # May be a string or a supported operator mapping (resolved like Headers/Body/Query).
     URLRoot: Optional[Union[str, Dict[str, Any]]] = None
     FlowControl: FlowControlCfg
 
@@ -257,7 +278,7 @@ class HttpRequest(BaseModel):
 
     Transport: Literal["http"] = "http"
     Method: Method
-    # str, or a $secrets/$dynamic/$pattern operator (resolved like Headers/Body/Query)
+    # String or supported operator mapping (resolved like Headers/Body/Query).
     URLPath: Union[str, Dict[str, Any]]
     # Optional per-request override of Defaults.URLRoot (same accepted forms)
     URLRoot: Optional[Union[str, Dict[str, Any]]] = None
@@ -276,6 +297,14 @@ class HttpRequest(BaseModel):
     @classmethod
     def validate_urlroot(cls, value):
         return _validate_urlroot(value)
+
+    @model_validator(mode='after')
+    def reject_explicit_null_urlroot(self) -> 'HttpRequest':
+        if "URLRoot" in self.model_fields_set and self.URLRoot is None:
+            raise ValueError(
+                "URLRoot cannot be null; omit it to inherit Defaults.URLRoot"
+            )
+        return self
 
 
 class AmqpRequest(BaseModel):
