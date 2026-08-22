@@ -355,8 +355,8 @@ StashConfig:
         - <RequestKey>:
             Method: <GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS>
             URLPath: <string>
-            # Optional per-request override of Defaults.URLRoot
-            URLRoot?: <string>
+            # Optional per-request override of Defaults.URLRoot (string or supported operator)
+            URLRoot?: <string|operator>
             Headers?: { <k>: <v>, ... }
             Body?:    { <k>: <v>, ... }
             Query?:   { <k>: <v>, ... }
