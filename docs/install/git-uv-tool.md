@@ -19,7 +19,7 @@ If UV reports that its tool directory is not on `PATH`, run `uv tool update-shel
 Pin a release tag when you need reproducible behavior:
 
 ```bash
-uv tool install 'git+https://github.com/ericwastaken/PayloadStash.git@1.2.0'
+uv tool install 'git+https://github.com/ericwastaken/PayloadStash.git@v1.2.0'
 ```
 
 ## Update or remove

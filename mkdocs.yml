@@ -67,6 +67,7 @@ nav:
   - AI agent skill: agent-skill.md
   - Installation:
       - Choose an installation: install/index.md
+      - GitHub Release archive: install/github-release.md
       - Local bootstrap: install/local-bootstrap.md
       - Cloned repository with UV: install/cloned-uv.md
       - GitHub install with UV: install/git-uv-tool.md

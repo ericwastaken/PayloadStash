@@ -19,7 +19,7 @@ PayloadStash sends HTTP and AMQP payloads from declarative YAML, captures values
 
     ---
 
-    Compare local, cloned, Git-based UV, and Docker installation paths.
+    Compare GitHub Release, local, cloned, Git-based UV, and Docker installation paths.
 
     [Installation options](install/index.md)
 

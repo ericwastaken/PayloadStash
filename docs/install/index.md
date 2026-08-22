@@ -1,9 +1,10 @@
 # Choose an installation
 
-PayloadStash can run from a managed local checkout, a UV-managed clone, a Git-installed UV tool, or the prebuilt container image. PayloadStash is not currently distributed through PyPI.
+PayloadStash can run from a stable GitHub Release archive, a managed local checkout, a UV-managed clone, a Git-installed UV tool, or the prebuilt container image. PayloadStash is not currently distributed through PyPI.
 
-| Method | Best for | Command | Local source checkout |
+| Method | Best for | Command | Local project directory |
 | --- | --- | --- | --- |
+| [GitHub Release archive](github-release.md) | Most users who want a stable native version without Git | `./payloadstash` | Required |
 | [Local bootstrap](local-bootstrap.md) | A self-contained checkout with a project-managed virtual environment | `./payloadstash` | Required |
 | [Cloned repository with UV](cloned-uv.md) | Trying the current source or contributing changes | `uv run payloadstash` | Required |
 | [GitHub install with UV](git-uv-tool.md) | A native, globally available CLI managed by UV | `payloadstash` | No |
