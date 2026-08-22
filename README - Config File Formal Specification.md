@@ -37,7 +37,7 @@ StashConfig (mapping, extra keys forbidden)
 - `Sequences`: list<Sequence> (required, non-empty)
 
 ## Validation rules
-- `StashConfig.Defaults.URLRoot`: required **only when the config contains at least one HTTP request** (may be omitted for AMQP-only configs). Accepts a non-empty string or a `$secrets`/`$dynamic`/`$pattern` operator.
+- `StashConfig.Defaults.URLRoot`: required **only when the config contains at least one HTTP request that does not define its own request-level `URLRoot`** (may be omitted for AMQP-only configs, or when every HTTP request carries its own `URLRoot`). Accepts a non-empty string or a `$secrets`/`$dynamic`/`$pattern`/`$timestamp`/`$func: timestamp` operator.
 - `StashConfig.Defaults.FlowControl`: required and must include `DelaySeconds` (int>=0) and `TimeoutSeconds` (int>=0). 
   Values validated individually; presence required.
 - `Sequence.Name` values must be unique across the config.
@@ -53,7 +53,7 @@ StashConfig (mapping, extra keys forbidden)
 ## Section types
 
 ### DefaultsSection (mapping, extra keys forbidden)
-- `URLRoot`: string OR `$secrets`/`$dynamic`/`$pattern` operator (optional; required only when the config contains an HTTP request; resolved like Headers/Body/Query)
+- `URLRoot`: string OR `$secrets`/`$dynamic`/`$pattern`/`$timestamp`/`$func: timestamp` operator (optional; required only when the config contains an HTTP request without its own request-level `URLRoot`; resolved like Headers/Body/Query)
 - `FlowControl`: FlowControlCfg (required)
 - `InsecureTLS`: bool (optional; default false). When true, TLS certificate verification and hostname checks are 
   disabled for HTTP requests (similar to curl --insecure).
@@ -108,7 +108,8 @@ A request is one of two variants, selected by the `Transport` field. When `Trans
 #### HttpRequest (`Transport: http`, the default)
 - `Transport`: literal `http` (optional; default `http`)
 - `Method`: enum { `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, `OPTIONS` } (required)
-- `URLPath`: string OR `$secrets`/`$dynamic`/`$pattern` operator (required; resolved like Headers/Body/Query, incl. `${captured:KEY}` at request time)
+- `URLPath`: string OR `$secrets`/`$dynamic`/`$pattern`/`$timestamp`/`$func: timestamp` operator (required; resolved like Headers/Body/Query, incl. `${captured:KEY}` at request time)
+- `URLRoot`: string OR `$secrets`/`$dynamic`/`$pattern`/`$timestamp`/`$func: timestamp` operator (optional; overrides `Defaults.URLRoot` for this request only; explicit null is invalid, while omission inherits the default; same resolution rules)
 - `Headers`: map<string, any> (optional)
 - `Body`: map<string, any> (optional)
 - `Query`: map<string, any> (optional)
@@ -267,7 +268,7 @@ The runner builds a resolved request set from the authored config using these ru
    - In the resolved output, `Retry` appears under each request if set by precedence. Explicit null is preserved.
 
 3) URLRoot / URLPath resolution (HTTP requests only)
-   - Each resolved HTTP request includes `URLRoot` from `Defaults.URLRoot` and its own `URLPath`, both run through the same operator resolution as Headers/Body/Query (`$secrets`/`$dynamic`/`$timestamp`/`$pattern`; `$pattern` and `when: request` defer to request time, including `${captured:KEY}`). AMQP requests do not receive `URLRoot` or `InsecureTLS`.
+   - Each resolved HTTP request includes `URLRoot` (the request-level `URLRoot` if provided, else `Defaults.URLRoot`) and its own `URLPath`, both run through the same operator resolution as Headers/Body/Query (`$secrets`/`$dynamic`/`$timestamp`/`$func: timestamp`/`$pattern`; `$pattern` and `when: request` defer to request time, including `${captured:KEY}`). AMQP requests do not receive `URLRoot` or `InsecureTLS`.
 
 4) FlowControl overlay
    - Effective `FlowControl` results from `Defaults.FlowControl` overlaid by `request.FlowControl` field-wise (`DelaySeconds`, `TimeoutSeconds`).
@@ -335,7 +336,7 @@ when specified but should be discouraged.
   ```yaml
   key: { $timestamp: format }
   ```
-  where `format` is one of: `iso_8601` (default), `epoch_ms`, or other formats supported by the runner.
+  where `format` is one of: `iso_8601` (default), `epoch_ms`, or `epoch_s`.
 - Long form (discouraged, but supported):
   ```yaml
   key: { $func: timestamp, format: format }
@@ -453,7 +454,7 @@ dynamics:
 - `${captured:KEY}` referenced in a context other than a `$pattern` template.
 - `Transport: amqp` request missing a broker URI, or with both `AMQP.Exchange` and `AMQP.RoutingKey` empty.
 - An HTTP-only key on an AMQP request, or an `AMQP` block on an HTTP request.
-- `Defaults.URLRoot` missing while the config contains an HTTP request.
+- `Defaults.URLRoot` missing while the config contains an HTTP request without its own request-level `URLRoot`.
 
 ## Authoring guidance
 - Prefer concise mapping forms for special operators:

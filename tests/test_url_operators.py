@@ -1,9 +1,14 @@
-"""URLRoot / URLPath operator support ($secrets, $dynamic, $pattern, inline secrets, ${captured}).
+"""URLRoot / URLPath operator support ($secrets, $dynamic, $pattern, $timestamp, $func).
 
 Plain-script style (matching tests/test_asserts.py). Run:
     .venv/bin/python tests/test_url_operators.py
 """
+import re
+import shutil
+import subprocess
 import sys
+import tempfile
+import textwrap
 import yaml
 from pathlib import Path
 
@@ -26,6 +31,60 @@ def _req(y, secrets=None, redact=False, seq=0, i=0):
     r = build_resolved_config_dict(cfg, secrets=secrets, redact_secrets=redact)
     item = r["StashConfig"]["Sequences"][seq]["Requests"][i]
     return next(iter(item.values()))
+
+
+def _rejected(y):
+    try:
+        validate_config_data(yaml.safe_load(y))
+        return False
+    except Exception:
+        return True
+
+
+def _dry_run(y, secrets_text=None, null_request_root=False, request_root_expression=None):
+    tmp = Path(tempfile.mkdtemp(prefix="ps-url-operators-"))
+    try:
+        config = tmp / "config.yml"
+        config.write_text(y, encoding="utf-8")
+        program = "from payload_stash.main import main; main()"
+        if null_request_root:
+            request_root_expression = "None"
+        if request_root_expression is not None:
+            program = textwrap.dedent(f"""
+                import payload_stash.main as app
+
+                original_build = app.build_resolved_config_dict
+
+                def build_with_injected_request_root(*args, **kwargs):
+                    resolved = original_build(*args, **kwargs)
+                    request = next(iter(resolved["StashConfig"]["Sequences"][0]["Requests"][0].values()))
+                    request["URLRoot"] = {request_root_expression}
+                    return resolved
+
+                app.build_resolved_config_dict = build_with_injected_request_root
+                app.main()
+            """)
+        command = [
+            sys.executable, "-c", program,
+            "run", str(config), "--out", str(tmp / "out"), "--dry-run", "--yes",
+        ]
+        if secrets_text is not None:
+            secrets = tmp / "secrets.env"
+            secrets.write_text(secrets_text, encoding="utf-8")
+            command.extend(["--secrets", str(secrets)])
+        proc = subprocess.run(
+            command,
+            cwd=str(Path(__file__).resolve().parents[1]),
+            capture_output=True,
+            text=True,
+        )
+        logs = "\n".join(
+            path.read_text(encoding="utf-8", errors="replace")
+            for path in (tmp / "out").rglob("*.log")
+        )
+        return proc, logs
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def run():
@@ -99,8 +158,261 @@ StashConfig:
 """
     try:
         validate_config_data(yaml.safe_load(missing)); check("missing URLRoot w/ HTTP rejected", False)
-    except Exception:
+    except Exception as exc:
+        message = str(exc)
         check("missing URLRoot w/ HTTP rejected", True)
+        check(
+            "missing URLRoot lists every supported operator",
+            all(operator in message for operator in ("$secrets", "$dynamic", "$pattern", "$timestamp", "$func")),
+        )
+
+    # request-level URLRoot overrides Defaults.URLRoot
+    y = """
+StashConfig:
+  Name: t
+  Defaults: { URLRoot: https://default.example.com, FlowControl: { DelaySeconds: 0, TimeoutSeconds: 5 } }
+  Sequences:
+    - Name: s
+      Type: Sequential
+      Requests:
+        - { a: { Method: GET, URLPath: /x, URLRoot: https://override.example.com } }
+        - { b: { Method: GET, URLPath: /y } }
+"""
+    check("request URLRoot overrides Defaults", _req(y, i=0)["URLRoot"] == "https://override.example.com")
+    check("request w/o URLRoot inherits Defaults", _req(y, i=1)["URLRoot"] == "https://default.example.com")
+
+    # request-level URLRoot supports operators ($secrets)
+    y = """
+StashConfig:
+  Name: t
+  Defaults: { URLRoot: https://default.example.com, FlowControl: { DelaySeconds: 0, TimeoutSeconds: 5 } }
+  Sequences:
+    - {Name: s, Type: Sequential, Requests: [ { a: { Method: GET, URLPath: /x, URLRoot: { $secrets: H } } } ]}
+"""
+    check("request URLRoot $secrets (actual)", _req(y, secrets={"H": "https://real"})["URLRoot"] == "https://real")
+    check("request URLRoot $secrets (redacted)", _req(y, secrets={"H": "https://real"}, redact=True)["URLRoot"] == "***REDACTED***")
+
+    # Remaining URLRoot operators work at both effective-root scopes.
+    y = """
+dynamics:
+  patterns: { host: { template: "https://api-${choice:e}.example.com" } }
+  sets: { e: ["stage"] }
+StashConfig:
+  Name: t
+  Defaults: { URLRoot: { $pattern: "https://pattern.example.com" }, FlowControl: { DelaySeconds: 0, TimeoutSeconds: 5 } }
+  Sequences:
+    - Name: s
+      Type: Sequential
+      Requests:
+        - { a: { Method: GET, URLPath: /x } }
+        - { b: { Method: GET, URLPath: /y, URLRoot: { $dynamic: host } } }
+"""
+    pattern_root = _req(y, i=0)["URLRoot"]
+    check(
+        "Defaults URLRoot $pattern resolves at request time",
+        resolve_deferred(pattern_root) == "https://pattern.example.com",
+    )
+    check("request URLRoot $dynamic resolves", _req(y, i=1)["URLRoot"] == "https://api-stage.example.com")
+
+    # Defaults.URLRoot may be omitted when every HTTP request has its own URLRoot
+    all_own = """
+StashConfig:
+  Name: t
+  Defaults: { FlowControl: { DelaySeconds: 0, TimeoutSeconds: 5 } }
+  Sequences:
+    - {Name: s, Type: Sequential, Requests: [ { a: { Method: GET, URLPath: /x, URLRoot: https://own.example.com } } ]}
+"""
+    try:
+        validate_config_data(yaml.safe_load(all_own)); check("Defaults.URLRoot omitted OK when all requests have URLRoot", True)
+    except Exception:
+        check("Defaults.URLRoot omitted OK when all requests have URLRoot", False)
+    check("all-own URLRoot resolves", _req(all_own)["URLRoot"] == "https://own.example.com")
+
+    # ...but still rejected when any HTTP request lacks its own URLRoot
+    mixed_missing = """
+StashConfig:
+  Name: t
+  Defaults: { FlowControl: { DelaySeconds: 0, TimeoutSeconds: 5 } }
+  Sequences:
+    - Name: s
+      Type: Sequential
+      Requests:
+        - { a: { Method: GET, URLPath: /x, URLRoot: https://own.example.com } }
+        - { b: { Method: GET, URLPath: /y } }
+"""
+    try:
+        validate_config_data(yaml.safe_load(mixed_missing)); check("missing URLRoot for uncovered request rejected", False)
+    except Exception:
+        check("missing URLRoot for uncovered request rejected", True)
+
+    # Invalid request overrides must not bypass Defaults.URLRoot coverage or
+    # override a valid default with an unusable value.
+    invalid_request_roots = [
+        '""',
+        '"   "',
+        '{}',
+        '{ foo: bar }',
+        '{ $unknown: value }',
+        '{ $secrets: " " }',
+        '{ $dynamic: 1 }',
+        '{ $pattern: [] }',
+        '{ $func: uuidv4 }',
+        '{ $timestamp: 123 }',
+        '{ $func: timestamp, extra: true }',
+        '{ $timestamp: { format: epoch_s, extra: true } }',
+        '{ $timestamp: epoch_s, when: later }',
+        '{ $secrets: H, $timestamp: epoch_s }',
+        '{ $timestamp: "" }',
+        '{ $timestamp: unsupported }',
+        '{ $timestamp: { format: [] } }',
+        '{ $timestamp: { format: null } }',
+        '{ $timestamp: { format: epoch_s, fmt: iso_8601 } }',
+        '{ $timestamp: { format: epoch_s, when: request }, when: resolve }',
+        '{ $func: timestamp, format: [] }',
+        '{ $func: timestamp, format: null }',
+        '{ $func: timestamp, format: unsupported }',
+        '{ $func: timestamp, format: epoch_s, fmt: iso_8601 }',
+    ]
+    for invalid_root in invalid_request_roots:
+        y = f"""
+StashConfig:
+  Name: t
+  Defaults: {{ URLRoot: https://default.example.com, FlowControl: {{ DelaySeconds: 0, TimeoutSeconds: 5 }} }}
+  Sequences:
+    - {{Name: s, Type: Sequential, Requests: [ {{ a: {{ Method: GET, URLPath: /x, URLRoot: {invalid_root} }} }} ]}}
+"""
+        check(f"invalid request URLRoot rejected: {invalid_root}", _rejected(y))
+
+        y = f"""
+StashConfig:
+  Name: t
+  Defaults: {{ URLRoot: {invalid_root}, FlowControl: {{ DelaySeconds: 0, TimeoutSeconds: 5 }} }}
+  Sequences:
+    - {{Name: s, Type: Sequential, Requests: [ {{ a: {{ Method: GET, URLPath: /x }} }} ]}}
+"""
+        check(f"invalid Defaults.URLRoot rejected: {invalid_root}", _rejected(y))
+
+    # Explicit null is not an override and must be rejected rather than inheriting Defaults.URLRoot.
+    authored_null_root = """
+StashConfig:
+  Name: t
+  Defaults: { URLRoot: https://default.example.com, FlowControl: { DelaySeconds: 0, TimeoutSeconds: 5 } }
+  Sequences:
+    - {Name: s, Type: Sequential, Requests: [ { a: { Method: GET, URLPath: /x, URLRoot: null } } ]}
+"""
+    try:
+        validate_config_data(yaml.safe_load(authored_null_root))
+        check("authored null request URLRoot rejected", False)
+    except Exception as exc:
+        check("authored null request URLRoot rejected", "URLRoot cannot be null" in str(exc))
+
+    # Default timestamp syntax and the fmt alias remain accepted while malformed options are rejected.
+    valid_timestamp_options = (
+        '{ $timestamp: null }',
+        '{ $timestamp: {} }',
+        '{ $timestamp: epoch_s }',
+        '{ $func: timestamp }',
+        '{ $func: timestamp, fmt: epoch_s }',
+    )
+    for valid_root in valid_timestamp_options:
+        y = f"""
+StashConfig:
+  Name: t
+  Defaults: {{ URLRoot: {valid_root}, FlowControl: {{ DelaySeconds: 0, TimeoutSeconds: 5 }} }}
+  Sequences:
+    - {{Name: s, Type: Sequential, Requests: [ {{ a: {{ Method: GET, URLPath: /x }} }} ]}}
+"""
+        check(f"valid timestamp URLRoot accepted: {valid_root}", not _rejected(y))
+
+    # Both timestamp operator forms produce integer roots at either scope and
+    # pass request processing through string conversion.
+    timestamp_roots = {
+        "Defaults $func": """
+StashConfig:
+  Name: t
+  Defaults: { URLRoot: { $func: timestamp, format: epoch_s, when: request }, FlowControl: { DelaySeconds: 0, TimeoutSeconds: 5 } }
+  Sequences:
+    - {Name: s, Type: Sequential, Requests: [ { a: { Method: GET, URLPath: /x } } ]}
+""",
+        "Defaults $timestamp": """
+StashConfig:
+  Name: t
+  Defaults: { URLRoot: { $timestamp: { format: epoch_s, when: request } }, FlowControl: { DelaySeconds: 0, TimeoutSeconds: 5 } }
+  Sequences:
+    - {Name: s, Type: Sequential, Requests: [ { a: { Method: GET, URLPath: /x } } ]}
+""",
+        "request $func": """
+StashConfig:
+  Name: t
+  Defaults: { URLRoot: https://default.example.com, FlowControl: { DelaySeconds: 0, TimeoutSeconds: 5 } }
+  Sequences:
+    - {Name: s, Type: Sequential, Requests: [ { a: { Method: GET, URLPath: /x, URLRoot: { $func: timestamp, format: epoch_s, when: request } } } ]}
+""",
+        "request $timestamp": """
+StashConfig:
+  Name: t
+  Defaults: { URLRoot: https://default.example.com, FlowControl: { DelaySeconds: 0, TimeoutSeconds: 5 } }
+  Sequences:
+    - {Name: s, Type: Sequential, Requests: [ { a: { Method: GET, URLPath: /x, URLRoot: { $timestamp: { format: epoch_s, when: request } } } } ]}
+""",
+    }
+    for scope_and_operator, timestamp_root in timestamp_roots.items():
+        check(f"supported {scope_and_operator} URLRoot accepted", not _rejected(timestamp_root))
+        proc, logs = _dry_run(timestamp_root)
+        check(f"integer {scope_and_operator} URLRoot passes request processing", proc.returncode == 0)
+        check(
+            f"integer {scope_and_operator} URLRoot is stringified in assembled URL",
+            re.search(r"URL: \d+/x", logs) is not None,
+        )
+
+    # Operator results that resolve to a blank string remain unusable at request time.
+    blank_secret_root = """
+StashConfig:
+  Name: t
+  Defaults: { URLRoot: { $secrets: H }, FlowControl: { DelaySeconds: 0, TimeoutSeconds: 5 } }
+  Sequences:
+    - {Name: s, Type: Sequential, Requests: [ { a: { Method: GET, URLPath: /x } } ]}
+"""
+    proc, logs = _dry_run(blank_secret_root, 'H="   "\n')
+    check(
+        "blank resolved URLRoot rejected before dispatch",
+        "Operation Cancelled" in proc.stdout and "URL:" not in logs,
+    )
+
+    blank_request_secret_root = """
+StashConfig:
+  Name: t
+  Defaults: { URLRoot: https://default.example.com, FlowControl: { DelaySeconds: 0, TimeoutSeconds: 5 } }
+  Sequences:
+    - {Name: s, Type: Sequential, Requests: [ { a: { Method: GET, URLPath: /x, URLRoot: { $secrets: H } } } ]}
+"""
+    proc, logs = _dry_run(blank_request_secret_root, 'H="   "\n')
+    check(
+        "blank resolved request URLRoot rejected without default fallback",
+        "Operation Cancelled" in proc.stdout and "URL:" not in logs,
+    )
+
+    # A present request-level URLRoot that resolves to null must not inherit Defaults.URLRoot.
+    explicit_null_root = """
+StashConfig:
+  Name: t
+  Defaults: { URLRoot: https://default.example.com, FlowControl: { DelaySeconds: 0, TimeoutSeconds: 5 } }
+  Sequences:
+    - {Name: s, Type: Sequential, Requests: [ { a: { Method: GET, URLPath: /x, URLRoot: https://override.example.com } } ]}
+"""
+    proc, logs = _dry_run(explicit_null_root, null_request_root=True)
+    check(
+        "explicit null request URLRoot rejected without default fallback",
+        "Operation Cancelled" in proc.stdout and "URL:" not in logs,
+    )
+
+    # Corrupt or unknown deferred values must not be stringified into malformed container URLs.
+    for root_expression in ("{}", "[]"):
+        proc, logs = _dry_run(explicit_null_root, request_root_expression=root_expression)
+        check(
+            f"resolved container URLRoot rejected: {root_expression}",
+            "Operation Cancelled" in proc.stdout and "URL:" not in logs,
+        )
 
     total, passed = len(_results), sum(_results)
     print("\n%d/%d passed — %s" % (passed, total, "ALL GREEN" if passed == total else "RED"))
