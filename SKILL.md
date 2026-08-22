@@ -15,6 +15,67 @@ PayloadStash reads a YAML config, executes HTTP requests **and/or AMQP (RabbitMQ
 
 ---
 
+## Install PayloadStash for Agent-Driven Work
+
+Do not reinstall PayloadStash when a usable command already exists. Before installing, inspect the current project and try the matching command:
+
+1. `payloadstash --help` for an existing UV tool or other command on `PATH`.
+2. `./payloadstash --help` when the current directory is a PayloadStash release archive or bootstrap-managed checkout.
+3. `uv run payloadstash --help` when the current directory is a cloned PayloadStash repository with `pyproject.toml`.
+
+Use the command that succeeds for subsequent `validate` and `run` operations. Do not modify the environment merely to replace a working installation.
+
+### Recommended fresh installation for an agent
+
+When no installation exists and the user permits installing tools, prefer a **release-pinned GitHub install managed by UV**. It is isolated, non-interactive, available outside a PayloadStash checkout, easy to remove, and reproducible. PayloadStash is not published to PyPI, so the Git URL is required.
+
+Prerequisites are Git and [UV](https://docs.astral.sh/uv/getting-started/installation/). Install the latest reviewed release tag shown by the [PayloadStash Releases page](https://github.com/ericwastaken/PayloadStash/releases/latest); for example:
+
+```bash
+uv tool install 'git+https://github.com/ericwastaken/PayloadStash.git@v1.2.0'
+payloadstash --help
+```
+
+Do not silently substitute `main` when stable or reproducible behavior is expected. If the requested configuration depends on an unreleased feature, explain that tradeoff before installing the branch head:
+
+```bash
+uv tool install git+https://github.com/ericwastaken/PayloadStash.git
+payloadstash --help
+```
+
+If UV reports that its tool directory is not on `PATH`, run `uv tool update-shell` and use the updated shell environment before retrying. Never claim that `uv tool install payloadstash` installs this project from PyPI.
+
+### Validate, update, or remove the tool
+
+After installation, verify both the executable and the configuration before attempting a run:
+
+```bash
+payloadstash --help
+payloadstash validate ./config.yml
+payloadstash validate ./config.yml --writeResolved
+```
+
+Reinstall with `--force` to move an existing UV tool to a chosen release tag, and uninstall it only when the user requests removal:
+
+```bash
+uv tool install --force 'git+https://github.com/ericwastaken/PayloadStash.git@v1.2.0'
+uv tool uninstall payloadstash
+```
+
+### Fallback when UV is unavailable
+
+Use the stable [GitHub Release archive](https://github.com/ericwastaken/PayloadStash/releases/latest) when Git or UV is unavailable but Python 3.8 or newer is present. Download and extract **Source code (zip)**, then run these commands from the extracted directory:
+
+```bash
+python3 bootstrap.py
+./payloadstash --help
+./payloadstash validate ./config.yml
+```
+
+The bootstrap creates a private `.venv` inside the extracted directory. Keep user configuration and output outside that directory so replacing or deleting the release does not remove user data. For container-only environments, follow the [GHCR Docker guide](https://ericwastaken.github.io/PayloadStash/install/docker/) instead of changing the host Python environment.
+
+---
+
 ## File Structure
 
 ```yaml
