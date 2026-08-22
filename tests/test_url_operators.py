@@ -3,7 +3,11 @@
 Plain-script style (matching tests/test_asserts.py). Run:
     .venv/bin/python tests/test_url_operators.py
 """
+import re
+import shutil
+import subprocess
 import sys
+import tempfile
 import yaml
 from pathlib import Path
 
@@ -34,6 +38,34 @@ def _rejected(y):
         return False
     except Exception:
         return True
+
+
+def _dry_run(y, secrets_text=None):
+    tmp = Path(tempfile.mkdtemp(prefix="ps-url-operators-"))
+    try:
+        config = tmp / "config.yml"
+        config.write_text(y, encoding="utf-8")
+        command = [
+            sys.executable, "-c", "from payload_stash.main import main; main()",
+            "run", str(config), "--out", str(tmp / "out"), "--dry-run", "--yes",
+        ]
+        if secrets_text is not None:
+            secrets = tmp / "secrets.env"
+            secrets.write_text(secrets_text, encoding="utf-8")
+            command.extend(["--secrets", str(secrets)])
+        proc = subprocess.run(
+            command,
+            cwd=str(Path(__file__).resolve().parents[1]),
+            capture_output=True,
+            text=True,
+        )
+        logs = "\n".join(
+            path.read_text(encoding="utf-8", errors="replace")
+            for path in (tmp / "out").rglob("*.log")
+        )
+        return proc, logs
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def run():
@@ -107,8 +139,13 @@ StashConfig:
 """
     try:
         validate_config_data(yaml.safe_load(missing)); check("missing URLRoot w/ HTTP rejected", False)
-    except Exception:
+    except Exception as exc:
+        message = str(exc)
         check("missing URLRoot w/ HTTP rejected", True)
+        check(
+            "missing URLRoot lists every supported operator",
+            all(operator in message for operator in ("$secrets", "$dynamic", "$pattern", "$timestamp", "$func")),
+        )
 
     # request-level URLRoot overrides Defaults.URLRoot
     y = """
@@ -205,6 +242,25 @@ StashConfig:
     - {Name: s, Type: Sequential, Requests: [ { a: { Method: GET, URLPath: /x } } ]}
 """
     check("supported URLRoot $func operator accepted", not _rejected(timestamp_root))
+
+    # Integer epoch roots pass request processing and are stringified for URL assembly.
+    proc, logs = _dry_run(timestamp_root)
+    check("integer URLRoot epoch passes request processing", proc.returncode == 0)
+    check("integer URLRoot epoch is stringified in assembled URL", re.search(r"URL: \d+/x", logs) is not None)
+
+    # Operator results that resolve to a blank string remain unusable at request time.
+    blank_secret_root = """
+StashConfig:
+  Name: t
+  Defaults: { URLRoot: { $secrets: H }, FlowControl: { DelaySeconds: 0, TimeoutSeconds: 5 } }
+  Sequences:
+    - {Name: s, Type: Sequential, Requests: [ { a: { Method: GET, URLPath: /x } } ]}
+"""
+    proc, logs = _dry_run(blank_secret_root, 'H="   "\n')
+    check(
+        "blank resolved URLRoot rejected before dispatch",
+        "Operation Cancelled" in proc.stdout and "URL:" not in logs,
+    )
 
     total, passed = len(_results), sum(_results)
     print("\n%d/%d passed — %s" % (passed, total, "ALL GREEN" if passed == total else "RED"))

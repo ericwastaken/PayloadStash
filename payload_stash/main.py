@@ -606,12 +606,12 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool, secrets: Path | N
                         url_root_eff = url_root
                     url_root_res = resolve_deferred(url_root_eff, secrets=secrets_map, captures=caps_snap)
                     url_path_res = resolve_deferred(url_path_raw, secrets=secrets_map, captures=caps_snap)
-                    if not isinstance(url_root_res, str) or not url_root_res.strip():
+                    if url_root_res is None or (isinstance(url_root_res, str) and not url_root_res.strip()):
                         raise ValueError(
                             f"Request '{r_key}' resolved URLRoot to an invalid value; "
                             "expected a non-blank string"
                         )
-                    url_root_str = url_root_res if isinstance(url_root_res, str) else ("" if url_root_res is None else str(url_root_res))
+                    url_root_str = str(url_root_res)
                     url_path_str = url_path_res if isinstance(url_path_res, str) else ("" if url_path_res is None else str(url_path_res))
 
                     # Build URL

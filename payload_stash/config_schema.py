@@ -382,7 +382,11 @@ class StashConfig(BaseModel):
             for seq in self.Sequences for item in seq.Requests
         )
         if has_http_without_urlroot and self.Defaults.URLRoot is None:
-            raise ValueError("Defaults.URLRoot is required (a non-empty string or a $secrets/$dynamic/$pattern value) when HTTP requests without their own URLRoot are present")
+            supported_operators = ", ".join(_URLROOT_OPERATOR_KEYS)
+            raise ValueError(
+                "Defaults.URLRoot is required (a non-empty string or a supported operator: "
+                f"{supported_operators}) when HTTP requests without their own URLRoot are present"
+            )
         return self
 
     @model_validator(mode='after')
