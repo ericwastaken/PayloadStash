@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title id="title">PayloadStash selected verified stash mark</title>
+  <path d="M148 80v124" fill="none" stroke="#16c7f3" stroke-width="48" stroke-linecap="round"/>
+  <path d="m103 167 45 49 45-49" fill="none" stroke="#16c7f3" stroke-width="48" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M364 80v124" fill="none" stroke="#ff7a00" stroke-width="48" stroke-linecap="round"/>
+  <path d="m319 167 45 49 45-49" fill="none" stroke="#ff7a00" stroke-width="48" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M102 232h93l25 45h72l25-45h93l-38 184H140z" fill="#0d2640" stroke="#16c7f3" stroke-width="34" stroke-linejoin="round"/>
+  <path d="m204 346 37 37 76-86" fill="none" stroke="#071426" stroke-width="62" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="m204 346 37 37 76-86" fill="none" stroke="#f7f8fa" stroke-width="36" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

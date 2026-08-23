@@ -8,8 +8,9 @@ site_dir: site
 
 theme:
   name: material
-  logo: assets/PayloadStash-InfoGraphic.png
-  favicon: assets/PayloadStash-InfoGraphic.png
+  custom_dir: docs/overrides
+  logo: assets/PayloadStash-Mark.svg
+  favicon: assets/PayloadStash-Favicon.svg
   features:
     - content.action.edit
     - content.code.copy
@@ -25,15 +26,15 @@ theme:
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default
-      primary: deep purple
-      accent: amber
+      primary: custom
+      accent: custom
       toggle:
         icon: material/weather-night
         name: Switch to dark mode
     - media: "(prefers-color-scheme: dark)"
       scheme: slate
-      primary: deep purple
-      accent: amber
+      primary: custom
+      accent: custom
       toggle:
         icon: material/weather-sunny
         name: Switch to light mode

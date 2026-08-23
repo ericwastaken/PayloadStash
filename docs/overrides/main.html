@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+
+{% block extrahead %}
+  {{ super() }}
+  {% if page.title and not page.is_homepage %}
+    {% set social_title = page.title | striptags ~ " - " ~ config.site_name %}
+  {% else %}
+    {% set social_title = config.site_name %}
+  {% endif %}
+  {% if page.meta and page.meta.description %}
+    {% set social_description = page.meta.description %}
+  {% else %}
+    {% set social_description = config.site_description %}
+  {% endif %}
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="{{ social_title }}">
+  <meta property="og:description" content="{{ social_description }}">
+  <meta property="og:image" content="{{ config.site_url }}assets/PayloadStash-Banner-OpenGraph.png">
+  {% if page.canonical_url %}
+    <meta property="og:url" content="{{ page.canonical_url }}">
+  {% endif %}
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="{{ social_title }}">
+  <meta name="twitter:description" content="{{ social_description }}">
+  <meta name="twitter:image" content="{{ config.site_url }}assets/PayloadStash-Banner-OpenGraph.png">
+  <meta name="theme-color" content="#071426">
+  <link rel="apple-touch-icon" sizes="180x180" href="{{ 'assets/PayloadStash-Icon-180.png' | url }}">
+{% endblock %}
