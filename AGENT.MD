@@ -7,7 +7,8 @@ PayloadStash separates end-user documentation from repository-facing developer a
 | Change | Required documentation |
 | --- | --- |
 | Installation, CLI, configuration, runtime behavior, outputs, examples, or troubleshooting visible to users | Update the applicable Markdown under `docs/`; do not recreate detailed user guides in root or packaged READMEs |
-| Developer setup, architecture, tests, contribution workflow, release process, or packaging production | Update the relevant repository Markdown only |
+| Developer setup, architecture, tests, or contribution workflow | Update the relevant repository Markdown only |
+| GitHub Release, GHCR publication, release recovery, or registry maintenance | Update `DEVELOPMENT.md`, the applicable workflow, and concise links or summaries in `README.md`; update packaged READMEs only when their artifact-production process changes |
 | Change affecting both audiences | Update each source for its audience, keep terminology and links aligned, and avoid copying the same guide into both |
 | Configuration/model change | Update `docs/reference/configuration.md`, affected `docs/configuration/` topics, and `config/config-example.yml` when an executable example should change; update developer docs only for implementation/maintenance impact |
 | CLI change | Update `docs/reference/cli.md`, affected workflows/examples, and repository developer notes only if development commands change |
@@ -20,11 +21,22 @@ PayloadStash separates end-user documentation from repository-facing developer a
 
 - `docs/` is the sole source of truth for end-user installation and operation.
 - `README.md` is a concise project/developer entry point and links users to GitHub Pages.
+- `DEVELOPMENT.md` is the source of truth for maintainer release preparation, GitHub Release publication, automated GHCR behavior, verification, and package cleanup safety.
 - `packaged-python/README - Python Version.md` and `packaged-docker/README - Docker Version.md` describe producing and maintaining artifacts, not using PayloadStash.
 - `config/config-example.yml` remains the canonical executable sample; `config/README.md` explains sample-file maintenance.
 - `SKILL.md` is the installable agent instruction source. It complements the end-user site and must reflect current schema, operator, transport, CLI, and output behavior rather than becoming a stale second specification.
 - Generated `site/` HTML is an artifact and must not be committed.
 - Do not document a PyPI installation unless the project is actually published there and the maintainer explicitly adds that channel.
+
+## Release operations
+
+- Read `DEVELOPMENT.md`, `.github/workflows/docker-publish.yml`, and `x-payloadstash-version-set.sh` before advising on or changing the release process.
+- Use the version helper with an unprefixed version such as `1.3.0`; the GitHub Release tag must be the matching `v1.3.0`.
+- Ensure the version bump is committed to `main` before the release tag is created. Saving a draft does not publish; publishing the release triggers the workflow.
+- Stable releases publish exact, minor, and `latest` tags. Prereleases publish only their exact prerelease tag. Normal `main` commits publish nothing.
+- In multi-account environments, verify the active GitHub CLI identity before external actions. Use API host `github.com` even when the repository remote uses a local SSH alias.
+- Do not create or publish a release, move or delete a tag, publish an image, or delete package versions without explicit user authorization for that external mutation.
+- Treat Buildx untagged platform and provenance records as possible dependencies of a tagged release. Resolve referenced digests before any GHCR cleanup and preserve every release index and its children.
 
 ## Validation before completion
 

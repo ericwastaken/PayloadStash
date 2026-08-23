@@ -82,9 +82,14 @@ Requests in each sequence execute sequentially or through a bounded concurrent w
 
 Artifact-production notes remain in [`packaged-python/README - Python Version.md`](./packaged-python/README%20-%20Python%20Version.md) and [`packaged-docker/README - Docker Version.md`](./packaged-docker/README%20-%20Docker%20Version.md). Publishing a GitHub Release builds, validates, and pushes the corresponding versioned image to `ghcr.io/ericwastaken/payloadstash`; normal commits do not publish containers.
 
+### Publishing a release
+
+Use [`DEVELOPMENT.md`](./DEVELOPMENT.md) for the complete maintainer procedure. In summary, update the version without a `v` prefix, test and commit it to `main`, then publish a GitHub Release whose tag adds the prefix, such as project version `1.3.0` with tag `v1.3.0`. Draft releases do not publish images. Stable releases produce exact, minor, and `latest` GHCR tags; prereleases produce only their exact prerelease tag.
+
 ## Repository documentation
 
 - [Release notes](./RELEASE-NOTES-v1.0.0.md)
+- [Development and release guide](./DEVELOPMENT.md)
 - [Configuration sample maintenance](./config/README.md)
 - [Agent documentation ownership rules](./AGENT.MD)
 - [License](./LICENSE)

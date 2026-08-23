@@ -1,11 +1,13 @@
 ---
 name: payloadstash
-description: Create, edit, and validate PayloadStash YAML configurations for HTTP and AMQP workflows.
+description: Create, edit, and validate PayloadStash HTTP and AMQP test suites, install or run PayloadStash, and assist maintainers with its GitHub Release and GHCR publication workflow.
 ---
 
-# Write a PayloadStash Config File
+# Use and Maintain PayloadStash
 
 Use this skill when asked to create, edit, or extend a PayloadStash YAML config file.
+
+Also use its maintainer section when asked to prepare, inspect, publish, troubleshoot, or clean up a PayloadStash release or GHCR package.
 
 ---
 
@@ -73,6 +75,36 @@ python3 bootstrap.py
 ```
 
 The bootstrap creates a private `.venv` inside the extracted directory. Keep user configuration and output outside that directory so replacing or deleting the release does not remove user data. For container-only environments, follow the [GHCR Docker guide](https://ericwastaken.github.io/PayloadStash/install/docker/) instead of changing the host Python environment.
+
+---
+
+## Maintainer Release and GHCR Workflow
+
+When asked for release help from a repository checkout, read `DEVELOPMENT.md`, `.github/workflows/docker-publish.yml`, and `x-payloadstash-version-set.sh` before acting. The maintained guide is also available at [DEVELOPMENT.md on GitHub](https://github.com/ericwastaken/PayloadStash/blob/main/DEVELOPMENT.md).
+
+Release invariants:
+
+- Update project files with `./x-payloadstash-version-set.sh 1.3.0`; do not pass the `v` prefix to the script.
+- Run the four repository test scripts and any documentation checks relevant to the release.
+- Commit and push the version bump to `main` before creating the release tag.
+- Create tag `v1.3.0` against that exact commit, then publish the GitHub Release. A draft release does not trigger publication.
+- A stable release publishes `1.3.0`, `1.3`, and `latest`. A prerelease such as `v1.4.0-rc.1` publishes only `1.4.0-rc.1`.
+- Normal commits to `main` do not publish a container. Future releases do not create `main` or `sha-*` tags.
+- The workflow validates version agreement, main-branch ancestry, tests, a `linux/amd64` candidate build, and the container version before authenticating to GHCR.
+
+Before any GitHub mutation in a multi-account environment, verify the account explicitly:
+
+```bash
+gh auth switch --hostname github.com --user ericwastaken
+gh api --hostname github.com user --jq .login
+git remote get-url origin
+```
+
+Use `github.com` for GitHub CLI API operations even when Git uses a local SSH alias such as `github-eric.com`. Never print an authentication token.
+
+An agent may inspect readiness, update local version files, run tests, and prepare release notes when asked. Creating or publishing a release, changing a tag, publishing an image, or deleting GHCR package versions requires explicit user authorization for that external action.
+
+For GHCR cleanup, preserve every semantic release version and the untagged platform or provenance manifests referenced by its image index. Do not delete a version carrying a semantic release tag merely because it also has a `sha-*` alias.
 
 ---
 
@@ -1000,12 +1032,12 @@ payloadstash run amqp-signals.yml --out ./output --secrets secrets.env
 
 ## Running with Docker (prebuilt image)
 
-The image is published to GitHub Container Registry on every push to `main` and on version tags — no build step needed.
+The image is published to GitHub Container Registry only when a GitHub Release is published. Normal commits to `main` do not publish images.
 
 **Set up a shell alias** (add to `~/.bashrc` or `~/.zshrc`, then `source` it):
 
 ```bash
-alias payloadstash='docker run --rm -it --pull always --platform linux/amd64 -v "$(pwd):/working" -w /working ghcr.io/ericwastaken/payloadstash:main'
+alias payloadstash='docker run --rm -it --pull always --platform linux/amd64 -v "$(pwd):/working" -w /working ghcr.io/ericwastaken/payloadstash:latest'
 ```
 
 **Usage** — paths work just like the native CLI, relative to your current working directory:
@@ -1025,7 +1057,7 @@ Notes:
 - Your current working directory is mounted inside the container — no special directory structure required.
 - `--pull always` keeps the image current on each run.
 - `--platform linux/amd64` is required on Apple Silicon.
-- Replace `:main` with a version tag (e.g., `:1.0.0`) to pin to a specific release.
+- `:latest` follows the newest stable release. Replace it with a version tag such as `:1.2.0` to pin to a reproducible release.
 
 ---
 
