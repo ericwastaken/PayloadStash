@@ -1,6 +1,6 @@
 # Expectations
 
-An `Expect` list evaluates every assertion after a response. Any failed assertion makes the completed run exit with code `1`.
+An `Expect` list defines the assertions for an HTTP or AMQP test case. PayloadStash evaluates every assertion after the operation, and any failed assertion makes the completed test-suite run exit with code `1`.
 
 ```yaml
 Expect:
@@ -38,4 +38,4 @@ Expect:
 For AMQP, assert publish statuses such as `ack`, `published`, `unroutable`, `reply`, or `matched`, and inspect synthesized `headers.x-amqp-*` metadata.
 
 !!! tip
-    A transport error alone does not necessarily determine the final process status. Add expectations for status and required response fields when the command must be automation-safe.
+    A transport error alone does not necessarily determine the final process status. Treat expectations as the test contract: assert every status, response field, header, timing limit, or AMQP outcome that must make the suite fail.

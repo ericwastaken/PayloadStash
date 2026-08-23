@@ -1,6 +1,6 @@
 # Output and reports
 
-`run --out ROOT` writes one UTC timestamped directory:
+`run --out ROOT` writes one UTC timestamped directory for each test-suite execution:
 
 ```text
 ROOT/<StashConfig.Name>/<RunTimestamp>/

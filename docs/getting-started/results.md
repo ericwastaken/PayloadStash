@@ -1,6 +1,6 @@
 # Read your first result
 
-Each run creates a UTC timestamped directory below the output root:
+Each test-suite run creates a UTC timestamped directory below the output root. Together, the exit status and retained artifacts provide both a machine-readable result and the evidence needed to diagnose a failure:
 
 ```text
 output/

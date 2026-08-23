@@ -1,6 +1,6 @@
 # Create your first configuration
 
-A PayloadStash YAML file contains a named `StashConfig`, optional defaults and forced values, and one or more sequences of requests.
+A PayloadStash YAML file is both a workflow definition and an executable HTTP/AMQP test suite. It contains a named `StashConfig`, optional defaults and forced values, and one or more sequences of requests or messages that exercise the target system.
 
 ## Start from the maintained example
 
@@ -14,7 +14,7 @@ For another installation channel, download [`config/config-example.yml`](https:/
 
 ## Minimal HTTP configuration
 
-This smaller configuration calls a public test API and verifies the response:
+This smaller test suite calls a public API and verifies the response:
 
 ```yaml
 StashConfig:
@@ -41,7 +41,7 @@ Save it as `config/quick-start.yml`. The important pieces are:
 - `Defaults.URLRoot` is combined with each request's `URLPath`.
 - `Sequences` control ordering and concurrency.
 - Each item under `Requests` gives the request a unique name.
-- `Expect` assertions make a failed response produce a failed run result.
+- `Expect` assertions turn system behavior into test outcomes and make a failed assertion produce a failed run result.
 
 ## Optional secrets file
 
@@ -60,4 +60,4 @@ Headers:
 
 Pass the file with `--secrets`. Resolved configurations and run logs redact loaded secret values. See [Secrets and dynamic values](../configuration/secrets-and-dynamic-values.md) for the full syntax.
 
-Next, [validate and run the configuration](run.md).
+Next, learn [how to structure a test suite](test-suite.md), then [validate and run the configuration](run.md).

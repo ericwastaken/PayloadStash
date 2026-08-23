@@ -1,6 +1,6 @@
 # Validate, resolve, and run
 
-The examples below use an installed `payloadstash` command. Prefix them with `uv run` for a cloned UV checkout, use `./payloadstash` for a bootstrap checkout, or follow the [Docker command form](../install/docker.md).
+The examples below validate and execute a PayloadStash configuration as an HTTP/AMQP test suite. They use an installed `payloadstash` command. Prefix them with `uv run` for a cloned UV checkout, use `./payloadstash` for a bootstrap checkout, or follow the [Docker command form](../install/docker.md).
 
 ## Validate
 
@@ -50,6 +50,6 @@ payloadstash run ./config/quick-start.yml \
   --yes
 ```
 
-Without `--yes`, PayloadStash displays a summary and asks for confirmation. A run continues after an individual request error so that later requests can execute; failed expectations make the process exit nonzero.
+Without `--yes`, PayloadStash displays a summary and asks for confirmation. A run continues after an individual test-case error so that later cases can execute; failed expectations make the completed suite exit nonzero.
 
 Now [inspect the generated results](results.md).

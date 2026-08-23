@@ -5,24 +5,20 @@
     <img src="assets/PayloadStash-Banner.png" alt="PayloadStash workflow from YAML and secret injection through HTTP and AMQP to captures, reports, and secret redaction">
 </picture>
 
-PayloadStash turns declarative YAML into repeatable HTTP and AMQP workflows. It injects secrets before transport, carries captured values between requests, verifies results with reusable expectations, and writes deterministic evidence for every run.
+PayloadStash turns declarative YAML into a repeatable HTTP and AMQP test suite. Each request or message becomes an executable test case: inject secrets, exercise the target system, carry captured values between operations, verify behavior with reusable expectations, and return an automation-friendly pass or fail result. Deterministic reports and response artifacts preserve the evidence from every run.
 
 [Choose an installation](install/index.md){ .md-button .md-button--primary }
-[Create your first configuration](getting-started/first-config.md){ .md-button }
-[Install the agent skill](agent-skill.md){ .md-button }
-
-!!! tip "Let your coding agent write PayloadStash configurations"
-    Download the [PayloadStash agent skill](agent-skill.md) to give a compatible agent current configuration, HTTP, AMQP, capture, expectation, and CLI guidance.
+[Build a test suite](getting-started/test-suite.md){ .md-button }
 
 ## Why PayloadStash
 
 <div class="grid cards feature-grid" markdown>
 
--   **One declarative workflow**
+-   **A test suite for HTTP and AMQP**
 
-    Send HTTP requests and AMQP messages sequentially or concurrently from the same YAML configuration.
+    Exercise APIs, brokers, and integrated systems from one YAML suite. Expectations determine the final process status for local testing or automation.
 
-    [Configure transports](configuration/index.md)
+    [Build a test suite](getting-started/test-suite.md)
 
 -   **Secrets enter before transport**
 
@@ -32,7 +28,7 @@ PayloadStash turns declarative YAML into repeatable HTTP and AMQP workflows. It 
 
 -   **Capture, verify, and continue**
 
-    Carry response values into later requests and make expectations determine the final command status.
+    Test stateful behavior by carrying response values into later requests and asserting status, data, headers, timing, and AMQP outcomes.
 
     [Capture values](configuration/capture.md) · [Verify results](configuration/expectations.md)
 
@@ -66,7 +62,7 @@ PayloadStash turns declarative YAML into repeatable HTTP and AMQP workflows. It 
 
     ---
 
-    Validate a configuration, inspect resolved values, run requests, and find the report.
+    Build and run an HTTP or AMQP test suite, then inspect its pass or fail result and retained evidence.
 
     [Getting started](getting-started/first-config.md)
 
@@ -85,14 +81,6 @@ PayloadStash turns declarative YAML into repeatable HTTP and AMQP workflows. It 
     Diagnose installation, configuration, connection, and output issues.
 
     [Troubleshooting](troubleshooting.md)
-
--   :material-robot: **Equip an AI agent**
-
-    ---
-
-    Install the PayloadStash skill so an agent can create and update configurations with current syntax.
-
-    [Install the agent skill](agent-skill.md)
 
 </div>
 

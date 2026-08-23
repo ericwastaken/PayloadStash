@@ -1,5 +1,7 @@
 # CLI and exit codes
 
+Use the CLI to validate and execute declarative HTTP/AMQP test suites. Its exit codes let local scripts and automated jobs distinguish a passing suite, failed expectations, and setup errors.
+
 ## Global command
 
 ```text

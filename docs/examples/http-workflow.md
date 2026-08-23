@@ -1,6 +1,6 @@
 # HTTP workflow example
 
-This sequential workflow creates an object, captures its identifier, and uses the value in a later request.
+This sequential HTTP test creates an object, captures its identifier, and verifies that the target system returns the same identifier in a later request.
 
 ```yaml
 dynamics:
@@ -57,4 +57,4 @@ payloadstash validate ./inventory.yml --secrets ./secrets.env
 payloadstash run ./inventory.yml --out ./output --yes --secrets ./secrets.env
 ```
 
-Replace the example endpoint and expected status with values appropriate for your API.
+Replace the example endpoint and expectations with the contract required by the API under test. A failed expectation makes the suite return a failing exit status.

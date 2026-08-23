@@ -2,7 +2,7 @@
 
 ![PayloadStash workflow banner](./project-media/PayloadStash-Banner.png)
 
-PayloadStash is a YAML-driven HTTP and AMQP workflow runner that injects secrets before transport, carries captured values between requests, evaluates reusable expectations, and writes deterministic run artifacts. Loaded secrets are redacted from resolved configurations and logs, while native, containerized, and offline deployment paths keep the same workflow portable.
+PayloadStash is a YAML-driven HTTP and AMQP workflow runner and executable test suite. Define requests and messages as test cases, carry captured values between them, evaluate reusable expectations, and use the final exit status in local or automated test runs. PayloadStash also injects secrets before transport and writes deterministic evidence for every run. Loaded secrets are redacted from resolved configurations and logs, while native, containerized, and offline deployment paths keep the same suite portable.
 
 ## User documentation
 

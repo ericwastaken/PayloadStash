@@ -1,6 +1,6 @@
 # AMQP workflow example
 
-This AMQP-only configuration publishes three messages concurrently and requires broker acknowledgements.
+This AMQP test publishes three messages concurrently and requires a broker acknowledgement for every test case.
 
 ```yaml
 dynamics:
@@ -50,4 +50,4 @@ StashConfig:
 payloadstash run ./events.yml --out ./output --yes --secrets ./secrets.env
 ```
 
-Set `RMQ_URI` in `secrets.env`. The exchange and binding must already exist; PayloadStash publishes messages but does not provision broker topology.
+Set `RMQ_URI` in `secrets.env`. The exchange and binding must already exist; PayloadStash publishes messages but does not provision broker topology. A missing acknowledgement fails its expectation and produces a failing suite result.

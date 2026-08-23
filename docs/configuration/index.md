@@ -1,6 +1,6 @@
 # Configuration structure
 
-PayloadStash reads YAML containing optional reusable definitions and one required `StashConfig` object.
+PayloadStash reads YAML containing optional reusable definitions and one required `StashConfig` object. A configuration can serve as an executable test suite against an HTTP API, an AMQP broker or consumer, or a system that uses both transports.
 
 ```yaml
 dynamics:                         # optional generated-value definitions
