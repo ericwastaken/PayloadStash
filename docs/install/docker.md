@@ -2,6 +2,10 @@
 
 Use the public GitHub Container Registry image when you want PayloadStash isolated from the host's Python environment.
 
+[Browse published images and tags](https://github.com/ericwastaken/PayloadStash/pkgs/container/payloadstash){ .md-button .md-button--primary }
+
+The GHCR package page lists every published image version, its available tags, publication date, digest, and pull command. Choose a versioned tag when you need a reproducible installation.
+
 ## Prerequisites
 
 - Docker Engine or Docker Desktop
