@@ -80,7 +80,7 @@ Requests in each sequence execute sequentially or through a bounded concurrent w
 | `./x-docker-package-payloadstash.sh` | Build the air-gapped Docker distribution archive |
 | `./x-payloadstash-version-set.sh` | Update project version metadata |
 
-Artifact-production notes remain in [`packaged-python/README - Python Version.md`](./packaged-python/README%20-%20Python%20Version.md) and [`packaged-docker/README - Docker Version.md`](./packaged-docker/README%20-%20Docker%20Version.md). The existing container publication workflow pushes `ghcr.io/ericwastaken/payloadstash` independently of documentation deployment.
+Artifact-production notes remain in [`packaged-python/README - Python Version.md`](./packaged-python/README%20-%20Python%20Version.md) and [`packaged-docker/README - Docker Version.md`](./packaged-docker/README%20-%20Docker%20Version.md). Publishing a GitHub Release builds, validates, and pushes the corresponding versioned image to `ghcr.io/ericwastaken/payloadstash`; normal commits do not publish containers.
 
 ## Repository documentation
 

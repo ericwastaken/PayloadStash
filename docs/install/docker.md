@@ -20,7 +20,7 @@ The following command mounts the current host directory at `/working`, uses that
 ```bash
 docker run --rm --platform linux/amd64 \
   -v "$(pwd):/working" -w /working \
-  ghcr.io/ericwastaken/payloadstash:main \
+  ghcr.io/ericwastaken/payloadstash:latest \
   run ./config/config-example.yml --out ./output --yes
 ```
 
@@ -29,7 +29,7 @@ Validate the same configuration without making requests:
 ```bash
 docker run --rm --platform linux/amd64 \
   -v "$(pwd):/working" -w /working \
-  ghcr.io/ericwastaken/payloadstash:main \
+  ghcr.io/ericwastaken/payloadstash:latest \
   validate ./config/config-example.yml
 ```
 
@@ -42,23 +42,26 @@ Keep the secrets file inside the mounted working directory and pass its containe
 ```bash
 docker run --rm --platform linux/amd64 \
   -v "$(pwd):/working" -w /working \
-  ghcr.io/ericwastaken/payloadstash:main \
+  ghcr.io/ericwastaken/payloadstash:latest \
   run ./config/config.yml --out ./output --yes \
   --secrets ./config/secrets.env
 ```
 
 ## Choose and update the image tag
 
-- `:main` follows successful image publications from the default branch.
-- A version tag such as `:1.2.0` keeps runs on a specific release.
+- `:latest` follows the newest published stable release.
+- A version tag such as `:1.2.0` pins runs to one reproducible release.
+- A prerelease tag such as `:1.3.0-rc.1` must be selected explicitly and does not replace `:latest`.
+
+Normal commits to `main` do not publish container images. PayloadStash publishes to GHCR only when a GitHub Release is published.
 
 Refresh the moving tag with:
 
 ```bash
-docker pull --platform linux/amd64 ghcr.io/ericwastaken/payloadstash:main
+docker pull --platform linux/amd64 ghcr.io/ericwastaken/payloadstash:latest
 ```
 
-Remove it with `docker image rm ghcr.io/ericwastaken/payloadstash:main`.
+Remove it with `docker image rm ghcr.io/ericwastaken/payloadstash:latest`.
 
 !!! note "Different paths in packaged Docker helpers"
     The repository's packaged Docker helper uses `./config` → `/app/config` and `./output` → `/app/output`. Those `/app` paths apply to that helper and Compose flow; the direct GHCR commands above deliberately use `/working` instead.
