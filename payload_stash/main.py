@@ -369,6 +369,11 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool, secrets: Path | N
             report_entries: list = []
             report_lock = _Lock()
             run_expect_failures: list = [0]
+            # run_execution_failures: counts requests that never produced a response (e.g.
+            # connection refused, DNS failure, timeout after retries exhausted). These are
+            # tracked separately from Expect assertion failures because Capture/Expect never
+            # ran for them, yet the run must still be reported as failed.
+            run_execution_failures: list = [0]
 
             # Pull defaults (including URLRoot) and flow control
             sc_resolved = resolved_actual.get("StashConfig", {})
@@ -791,6 +796,11 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool, secrets: Path | N
                         _build_report_entry(seq_i, idx, r_key, method, full_url, headers_out, body_res,
                                             -1, duration_ms, {}, str(he), None,
                                             None, None, None, None)
+                        # Unrecovered transport failure (no response, so Capture/Expect never ran).
+                        # Track separately from Expect assertion failures so the run still exits
+                        # non-zero even when no Expect block was configured.
+                        with captures_lock:
+                            run_execution_failures[0] += 1
 
                     return idx, lines, expect_fail_count
 
@@ -1008,6 +1018,8 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool, secrets: Path | N
                         _build_report_entry(seq_i, idx, r_key, method_label, target_label, properties, body_res,
                                             -1, duration_ms, {}, str(he), None,
                                             None, None, None, None)
+                        with captures_lock:
+                            run_execution_failures[0] += 1
 
                     return idx, lines, expect_fail_count
 
@@ -1070,8 +1082,11 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool, secrets: Path | N
             except Exception as re_err:
                 _log_redacted(f"Warning: failed to write report: {re_err}")
 
+            if run_execution_failures[0] > 0:
+                click.echo(f"\n{run_execution_failures[0]} request(s) failed to execute (no response received).")
             if run_expect_failures[0] > 0:
                 click.echo(f"\n{run_expect_failures[0]} expect assertion(s) failed.")
+            if run_expect_failures[0] > 0 or run_execution_failures[0] > 0:
                 sys.exit(1)
         else:
             click.echo("\nOperation Cancelled")

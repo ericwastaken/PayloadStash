@@ -35,7 +35,7 @@ payloadstash run --out DIRECTORY [--dry-run] [--yes] [--secrets FILE] CONFIG
 - `--yes` skips the confirmation prompt.
 - `--secrets FILE` loads secret values; written resolved data and logs are redacted.
 
-Run configuration/output setup failures return `9`. Failed `Expect` assertions return `1`; a successful run returns `0`. Individual operation errors are recorded and execution continues, so add explicit expectations for statuses that must fail automation.
+Run configuration/output setup failures return `9`. Failed `Expect` assertions return `1`. A request that never produces a response (connection refused, DNS failure, timeout after retries are exhausted, etc.) also returns `1`, even when it has no `Expect` block, since `Capture`/`Expect` never ran to judge it. A successful run — including individual requests that received a response satisfying their `Expect` assertions, such as an expected HTTP 404 — returns `0`. Individual operation errors are recorded and execution continues, so add explicit expectations for statuses that must fail automation.
 
 !!! note
     There is no `payloadstash resolve` command. Use `validate --writeResolved`, or inspect the resolved file written by `run`.
