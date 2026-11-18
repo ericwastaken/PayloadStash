@@ -46,4 +46,5 @@ Use `payloadstash validate CONFIG --writeResolved` to inspect the effective reda
 - [Sequencing, concurrency, and retries](execution.md)
 - [Capture values](capture.md)
 - [Expectations](expectations.md)
+- [Script hooks](hooks.md)
 - [Complete configuration schema](../reference/configuration.md)

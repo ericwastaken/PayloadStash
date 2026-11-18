@@ -47,6 +47,10 @@ docker run --rm --platform linux/amd64 \
   --secrets ./config/secrets.env
 ```
 
+## Script hooks in the container
+
+[Script hooks](../configuration/hooks.md) run inside the container. The image is based on `python:3.11-slim` and has no Docker CLI, `jq`, or database clients, and only the mounted working directory is visible. Hooks that need host tools need a native installation instead.
+
 ## Choose and update the image tag
 
 - `:latest` follows the newest published stable release.
