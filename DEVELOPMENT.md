@@ -48,6 +48,7 @@ Run the application tests before committing:
 /opt/homebrew/bin/uv run python tests/test_header_case.py
 /opt/homebrew/bin/uv run python tests/test_url_operators.py
 /opt/homebrew/bin/uv run python tests/test_amqp.py
+/opt/homebrew/bin/uv run python tests/test_hooks.py
 ```
 
 When documentation changed, also run:

@@ -11,7 +11,26 @@ from .config_schema import validate_config_path, format_validation_error, build_
 from .config_utility import evaluate_expect, resolve_response_path
 
 
-def _write_markdown_report(report_path, sc_name: str, config_stem: str, started_ts: str, entries: list) -> None:
+def _hooks_markdown(hooks: list) -> list:
+    """The report's Hooks table: one row per hook that ran (or would run, in a dry run)."""
+    def _code(text: str) -> str:
+        text = text.replace("|", "\\|")
+        return f"`` {text} ``" if "`" in text else f"`{text}`"
+
+    lines = ["## Hooks\n", "| Hook | Command | Result | Duration |", "|---|---|---|---|"]
+    for h in hooks:
+        if h["ok"] is None:
+            result = "⏭️ " + h["result"]
+        else:
+            result = ("✅ " if h["ok"] else "❌ ") + h["result"].replace("|", "\\|")
+        duration = "" if h["duration_ms"] is None else f"{h['duration_ms']}ms"
+        lines.append(f"| {h['label']} | {_code(h['command'])} | {result} | {duration} |")
+    lines.append("")
+    return lines
+
+
+def _write_markdown_report(report_path, sc_name: str, config_stem: str, started_ts: str, entries: list,
+                           hooks: list | None = None) -> None:
     # New function. Generates a human-readable markdown report of the run, inspired by
     # the examen test runner's output format. Entries are accumulated by _build_report_entry
     # inside _process_single_request and sorted into config order at write time.
@@ -58,6 +77,9 @@ def _write_markdown_report(report_path, sc_name: str, config_stem: str, started_
                 icon = "✅" if passed else "❌"
                 lines.append(f"| `{e['r_key']}` | `{label}` | {icon} |")
         lines.append("")
+
+    if hooks:
+        lines.extend(_hooks_markdown(hooks))
 
     lines.append("---\n")
 
@@ -155,6 +177,22 @@ def _write_markdown_report(report_path, sc_name: str, config_stem: str, started_
         f.write("\n".join(lines))
 
 
+def _describe_hooks(resolved: dict) -> str:
+    """One-line hook count for the run summary, e.g. 'BeforeAll 2, Before 1 (1 sequence), AfterAll 1'."""
+    sc = resolved.get("StashConfig", {})
+    hooks = sc.get("Hooks") or {}
+    seq_befores = [len(s.get("Before") or []) for s in sc.get("Sequences", []) if s.get("Before")]
+    parts = []
+    if hooks.get("BeforeAll"):
+        parts.append(f"BeforeAll {len(hooks['BeforeAll'])}")
+    if seq_befores:
+        n_seq = len(seq_befores)
+        parts.append(f"Before {sum(seq_befores)} ({n_seq} sequence{'s' if n_seq != 1 else ''})")
+    if hooks.get("AfterAll"):
+        parts.append(f"AfterAll {len(hooks['AfterAll'])}")
+    return ", ".join(parts)
+
+
 @click.group(help="PayloadStash CLI")
 @click.version_option(__version__, prog_name="PayloadStash")
 def main():
@@ -215,7 +253,7 @@ def validate(config: Path, writeresolved: bool, secrets: Path | None):
 @main.command(help="Run a PayloadStash config: validate, resolve, write resolved, then process sequences and requests.")
 @click.argument("config", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.option("--out", "out_dir", required=True, type=click.Path(file_okay=False, path_type=Path), help="Output directory root for run artifacts.")
-@click.option("--dry-run", is_flag=True, help="Resolve request configs and log actions, but do not actually make HTTP requests.")
+@click.option("--dry-run", is_flag=True, help="Resolve request configs and log actions, but do not actually make HTTP requests or run hooks.")
 @click.option("--yes", is_flag=True, help="Automatically continue without prompting for confirmation.")
 @click.option("--secrets", type=click.Path(exists=True, dir_okay=False, path_type=Path), help="Path to secrets file (KEY=VALUE lines) to resolve $secrets references.")
 
@@ -284,6 +322,9 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool, secrets: Path | N
     click.echo(f"  Output folder:   {run_root}")
     click.echo(f"  Resolved config: {resolved_path}")
     click.echo(f"  Log file:        {log_path}")
+    _hooks_summary = _describe_hooks(resolved_actual)
+    if _hooks_summary:
+        click.echo(f"  Hooks:           {_hooks_summary}")
     if dry_run:
         click.echo("  Mode:            DRY-RUN (no HTTP calls)")
 
@@ -418,7 +459,90 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool, secrets: Path | N
                 except Exception as e:
                     _log_redacted(f"Warning: failed to append to results CSV: {e}")
 
-            for i, seq_d in enumerate(seq_dicts, start=1):
+            # Script hooks: Hooks.BeforeAll, Hooks.AfterAll, and per-sequence Before.
+            # Each command runs without a shell, in the config file's folder, with the caller's
+            # environment. Arguments are split first, then filled in (${captured:KEY} etc.), so a
+            # captured value stays one argument. Output is streamed to the console and run.log
+            # with secret redaction. The first failing command stops its list.
+            from .hooks import build_argv, normalize_entries, run_command
+            import shlex as _shlex
+            hooks_resolved = sc_resolved.get("Hooks") or {}
+            _dyn_cfg = getattr(cfg, "dynamics", None)
+            hook_sets = dict((_dyn_cfg.sets or {}) if _dyn_cfg is not None else {})
+            hook_cwd = config.resolve().parent
+            hook_records: list = []    # rows for the report's Hooks table
+            hook_failures: list = []   # (label, reason) of each hook that failed
+
+            def _run_hooks(stage: str, entries) -> bool:
+                """Run one hook list in order. Returns False at the first failure; later commands don't run.
+
+                Never raises (except on Ctrl-C): the outer handler of this command turns an
+                exception into "Operation Cancelled" with exit 0, which would hide a failed hook.
+                """
+                if not entries:
+                    return True
+                try:
+                    specs = normalize_entries(entries)
+                except Exception as ne:
+                    _hook_failed(stage, str(entries), str(ne), None)
+                    return False
+                for n, spec in enumerate(specs, start=1):
+                    label = f"{stage}[{n}]"
+                    if dry_run:
+                        dmsg = f"  DRY-RUN: would run hook {label}: {spec.command}"
+                        click.echo(_redact_text(dmsg))
+                        _log_redacted(dmsg)
+                        hook_records.append({"label": label, "command": _redact_text(spec.command),
+                                             "result": "dry run, not run", "ok": None, "duration_ms": None})
+                        continue
+                    shown = spec.command
+                    try:
+                        with captures_lock:
+                            caps_snap = dict(captured)
+                        argv = build_argv(spec.command, caps_snap, sets=hook_sets, secrets=secrets_map)
+                        shown = _shlex.join(argv)
+                    except Exception as be:
+                        _hook_failed(label, shown, f"not run: {be}", None)
+                        return False
+                    try:
+                        click.echo(_redact_text(f"Running hook {label}: {shown}"))
+                        timeout_note = f" (timeout {spec.timeout_s:g}s)" if spec.timeout_s else ""
+                        _log_redacted(f"  Hook {label}: {shown}{timeout_note}")
+
+                        def _on_line(line: str, _label: str = label) -> None:
+                            red = _redact_text(line)
+                            click.echo(f"  [{_label}] {red}")
+                            _log_redacted(f"    | {red}")
+
+                        result = run_command(argv, cwd=hook_cwd, timeout_s=spec.timeout_s, on_line=_on_line)
+                    except Exception as re_:
+                        _hook_failed(label, shown, f"error: {re_}", None)
+                        return False
+                    reason = result.describe()
+                    if result.timed_out:
+                        reason = f"timed out after {spec.timeout_s:g}s"
+                    if not result.ok:
+                        _hook_failed(label, shown, reason, result.duration_ms)
+                        return False
+                    _log_redacted(f"  Hook {label}: {reason} ({result.duration_ms} ms)")
+                    hook_records.append({"label": label, "command": _redact_text(shown), "result": reason,
+                                         "ok": True, "duration_ms": result.duration_ms})
+                return True
+
+            def _hook_failed(label: str, shown: str, reason: str, duration_ms) -> None:
+                took = f" ({duration_ms} ms)" if duration_ms is not None else ""
+                fmsg = f"  Hook {label} FAILED: {reason}{took}"
+                click.echo(_redact_text(fmsg.strip()))
+                _log_redacted(fmsg)
+                hook_failures.append((label, _redact_text(reason)))
+                hook_records.append({"label": label, "command": _redact_text(shown), "result": _redact_text(reason),
+                                     "ok": False, "duration_ms": duration_ms})
+
+            before_all_ok = _run_hooks("BeforeAll", hooks_resolved.get("BeforeAll"))
+            if not before_all_ok:
+                _log_redacted("  BeforeAll failed: no sequences will run.")
+
+            for i, seq_d in enumerate(seq_dicts if before_all_ok else [], start=1):
                 s_name = seq_d.get("Name")
                 s_type = seq_d.get("Type")
                 s_conc = seq_d.get("ConcurrencyLimit")
@@ -428,6 +552,12 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool, secrets: Path | N
                 msg += ")"
                 click.echo(msg)
                 _log_redacted(msg)
+
+                # Before hooks run ahead of this sequence's first request (for Concurrent, before
+                # its threads start). A failure stops this sequence and every later one.
+                if seq_d.get("Before") and not _run_hooks(f"Before({s_name})", seq_d.get("Before")):
+                    _log_redacted(f"  Before hook failed: sequence {i}/{total_seq} and later sequences will not run.")
+                    break
 
                 # Create per-sequence output directory (seqNNN-Name)
                 seq_dir_name = f"seq{i:03d}-{s_name}"
@@ -1056,6 +1186,12 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool, secrets: Path | N
                         except Exception:
                             pass
 
+            # AfterAll runs whether requests or Expect checks passed or failed, and after a failed
+            # Before hook (requests were sent, so cleanup and log checks still matter). It is
+            # skipped when BeforeAll failed: nothing ran, and BeforeAll's own state may be incomplete.
+            if before_all_ok:
+                _run_hooks("AfterAll", hooks_resolved.get("AfterAll"))
+
             _log_redacted("=== PayloadStash run finished ===")
 
             # Write the markdown report. This is a new artifact alongside the existing
@@ -1066,13 +1202,25 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool, secrets: Path | N
                 _write_markdown_report(
                     run_root / f"{config.stem}-report.md",
                     sc_name, config.stem, ts, report_entries,
+                    hooks=hook_records or None,
                 )
             except Exception as re_err:
                 _log_redacted(f"Warning: failed to write report: {re_err}")
 
+            # Exit codes: a failed BeforeAll is a setup failure (9, nothing was sent); a failed
+            # Before or AfterAll hook, or a failed Expect, is 1.
+            exit_code = 0
             if run_expect_failures[0] > 0:
                 click.echo(f"\n{run_expect_failures[0]} expect assertion(s) failed.")
-                sys.exit(1)
+                exit_code = 1
+            for f_label, f_reason in hook_failures:
+                click.echo(f"\nHook {f_label} failed: {f_reason}.")
+                exit_code = 1
+            if not before_all_ok:
+                click.echo("No requests were sent.")
+                exit_code = 9
+            if exit_code:
+                sys.exit(exit_code)
         else:
             click.echo("\nOperation Cancelled")
     except Exception:

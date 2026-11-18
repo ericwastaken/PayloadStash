@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shlex
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Union, Tuple
@@ -9,6 +10,7 @@ from typing_extensions import Annotated
 from pydantic import BaseModel, Field, ValidationError, ConfigDict, model_validator, field_validator, TypeAdapter
 
 from . import config_utility as cfgutil
+from .hooks import captured_keys
 
 
 # Enums for constrained values
@@ -340,13 +342,80 @@ class RequestItem(BaseModel):
         return cls(key=k, value=req)
 
 
+def _check_hook_command(command: Any) -> Any:
+    """A hook command must be non-blank and split cleanly into arguments (no unbalanced quotes)."""
+    if not isinstance(command, str) or not command.strip():
+        raise ValueError("hook command must be a non-blank string")
+    try:
+        argv = shlex.split(command)
+    except ValueError as e:
+        raise ValueError(f"hook command can't be split into arguments ({e}): {command!r}")
+    if not argv:
+        raise ValueError(f"hook command has no arguments: {command!r}")
+    return command
+
+
+def _check_hook_entries(entries: Optional[List[Any]]) -> Optional[List[Any]]:
+    for entry in entries or []:
+        if isinstance(entry, str):
+            _check_hook_command(entry)
+    return entries
+
+
+class HookCommand(BaseModel):
+    """Mapping form of a hook entry, for when a timeout is needed."""
+    model_config = ConfigDict(extra='forbid')
+
+    Command: str
+    TimeoutSeconds: Optional[float] = Field(None, gt=0)
+
+    @field_validator('Command')
+    @classmethod
+    def validate_command(cls, value):
+        return _check_hook_command(value)
+
+
+# A hook entry is a command string, or {Command, TimeoutSeconds}.
+HookEntry = Union[str, HookCommand]
+
+
+class HooksSection(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    BeforeAll: Optional[List[HookEntry]] = None
+    AfterAll: Optional[List[HookEntry]] = None
+
+    @field_validator('BeforeAll', 'AfterAll')
+    @classmethod
+    def validate_entries(cls, value):
+        return _check_hook_entries(value)
+
+    @model_validator(mode='after')
+    def reject_captured_in_before_all(self) -> 'HooksSection':
+        # Nothing can be captured before the first sequence runs.
+        for entry in self.BeforeAll or []:
+            command = entry if isinstance(entry, str) else entry.Command
+            if captured_keys(command):
+                raise ValueError(
+                    f"Hooks.BeforeAll can't use ${{captured:...}} (nothing is captured before the first sequence): {command!r}"
+                )
+        return self
+
+
 class Sequence(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
     Name: str
     Type: SequenceType
     ConcurrencyLimit: Optional[int] = Field(None, ge=1)
+    # Hook commands run right before this sequence's first request
+    Before: Optional[List[HookEntry]] = None
     Requests: List[RequestItem]
+
+    @field_validator('Before')
+    @classmethod
+    def validate_before(cls, value):
+        return _check_hook_entries(value)
 
     @field_validator('Requests', mode='before')
     @classmethod
@@ -396,6 +465,7 @@ class StashConfig(BaseModel):
     Name: str
     Defaults: DefaultsSection
     Forced: Optional[ForcedSection] = None
+    Hooks: Optional[HooksSection] = None
     Sequences: List[Sequence]
 
     @model_validator(mode='after')
@@ -702,6 +772,22 @@ def _resolve_values(value: Any, dyn: Optional[Dynamics], secrets: Optional[Dict[
     return value
 
 
+def _hook_entries_out(entries: List[Any], dyn: Optional[Dynamics], secrets: Optional[Dict[str, str]]) -> List[Any]:
+    """Copy hook entries into the resolved config verbatim (placeholders are filled when the hook runs).
+
+    Like $pattern templates, each argument is test-expanded now so that a bad placeholder or a
+    secret that can't be resolved fails at validation instead of mid-run.
+    """
+    sets = (dyn.sets or {}) if dyn else {}
+    out: List[Any] = []
+    for entry in entries:
+        command = entry if isinstance(entry, str) else entry.Command
+        for arg in shlex.split(command):
+            cfgutil.dynamic_expand(arg, sets, secrets=secrets, redact_secrets=True)
+        out.append(entry if isinstance(entry, str) else entry.model_dump(exclude_none=True))
+    return out
+
+
 def _amqp_section_to_dict(sec: Any) -> Dict[str, Any]:
     if sec is None:
         return {}
@@ -733,7 +819,7 @@ def _merge_amqp_dict(d_sec: Any, r_sec: Any, f_sec: Any) -> Dict[str, Any]:
 try:
     # In Pydantic v2, model_rebuild resolves forward refs
     ns = globals()
-    for _model in (AmqpProperties, AmqpTLS, AmqpWaitFor, AmqpSection, HttpRequest, AmqpRequest, RequestItem, Sequence, DefaultsSection, ForcedSection, StashConfig, TopLevelConfig):
+    for _model in (AmqpProperties, AmqpTLS, AmqpWaitFor, AmqpSection, HttpRequest, AmqpRequest, RequestItem, HookCommand, HooksSection, Sequence, DefaultsSection, ForcedSection, StashConfig, TopLevelConfig):
         _model.model_rebuild(force=True, _types_namespace=ns)
 except Exception:
     # Safe to ignore if rebuild not necessary
@@ -831,6 +917,15 @@ def build_resolved_config_dict(cfg: TopLevelConfig, secrets: Optional[Dict[str, 
         if f:
             sc_out["Forced"] = f
 
+    if sc.Hooks is not None:
+        h: Dict[str, Any] = {}
+        for stage in ("BeforeAll", "AfterAll"):
+            stage_entries = getattr(sc.Hooks, stage)
+            if stage_entries:
+                h[stage] = _hook_entries_out(stage_entries, dyn, secrets)
+        if h:
+            sc_out["Hooks"] = h
+
 
     # Sequences with resolved requests
     seq_list: List[Dict[str, Any]] = []
@@ -841,6 +936,8 @@ def build_resolved_config_dict(cfg: TopLevelConfig, secrets: Optional[Dict[str, 
         }
         if seq.ConcurrencyLimit is not None:
             seq_out["ConcurrencyLimit"] = seq.ConcurrencyLimit
+        if seq.Before:
+            seq_out["Before"] = _hook_entries_out(seq.Before, dyn, secrets)
 
         resolved_requests: List[Dict[str, Any]] = []
         for item in seq.Requests:
