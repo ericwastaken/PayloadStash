@@ -127,6 +127,8 @@ jobs:
             exit 1
           fi
           docker run --rm payloadstash:release-candidate --help >/dev/null
+          # Tools that script hooks rely on inside the container.
+          docker run --rm --entrypoint sh payloadstash:release-candidate -c 'curl --version && jq --version && docker --version' >/dev/null
 
       - name: Extract release image metadata
         id: meta

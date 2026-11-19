@@ -49,7 +49,35 @@ docker run --rm --platform linux/amd64 \
 
 ## Script hooks in the container
 
-[Script hooks](../configuration/hooks.md) run inside the container. The image is based on `python:3.11-slim` and has no Docker CLI, `jq`, or database clients, and only the mounted working directory is visible. Hooks that need host tools need a native installation instead.
+[Script hooks](../configuration/hooks.md) run inside the container, with the tools the image provides:
+
+- `bash` and the core shell tools (`sed`, `grep`, `date`, ...)
+- Python 3.11
+- `curl` and `jq`
+- The Docker CLI (client only, without Compose)
+
+The image has no database clients. Hooks see only mounted folders, so keep hook scripts and the files they read inside a mounted folder. Environment variables reach hooks only when you pass them with `-e`.
+
+### Use the host's Docker from a hook
+
+To let a hook restart a container, read its logs, or run any other `docker` command against the host, mount the host's Docker socket:
+
+```bash
+docker run --rm --platform linux/amd64 \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v "$(pwd):/working" -w /working \
+  ghcr.io/ericwastaken/payloadstash:latest \
+  run ./config/config.yml --out ./output --yes
+```
+
+!!! warning "The socket gives full control of the host's Docker"
+    A container with the Docker socket mounted can start, stop, and remove any container on the host. Mount it only for configurations whose hooks you trust.
+
+### Reach services on the host
+
+Inside the container, `localhost` is the container itself. Hooks and requests reach services on the host at `host.docker.internal`. Docker Desktop provides that name; on Linux, add `--add-host host.docker.internal:host-gateway`.
+
+Hooks that need other host tools need a native installation instead.
 
 ## Choose and update the image tag
 

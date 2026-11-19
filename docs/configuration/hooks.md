@@ -112,7 +112,7 @@ Configurations without hooks produce exactly the same output as before.
 
 ## Where hooks run
 
-Hooks run wherever PayloadStash runs, with the tools available there. They are meant for a native installation (for example `uv run payloadstash ...`), where scripts can use the machine's Docker, `jq`, or database clients.
+Hooks run wherever PayloadStash runs, with the tools available there. With a native installation (for example `uv run payloadstash ...`), scripts use the machine's own tools.
 
 !!! warning "Docker image"
-    In the [GHCR image](../install/docker.md), hooks run inside the container. The image is based on `python:3.11-slim` and has no Docker CLI, `jq`, or database clients, and only the mounted working directory is visible.
+    In the [GHCR image](../install/docker.md), hooks run inside the container. The image includes `bash`, the core shell tools, Python, `curl`, `jq`, and the Docker CLI, but no database clients, and only mounted folders are visible. To let a hook use the host's Docker, mount the Docker socket; see [Script hooks in the container](../install/docker.md#script-hooks-in-the-container). For other host tools, use a native installation.

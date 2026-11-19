@@ -559,7 +559,7 @@ StashConfig:
 
 **Output:** hook stdout/stderr stream to the console (prefixed `[BeforeAll[1]]`) and to `run.log` with secret redaction; `run.log` records each command, exit code, and duration; `report.md` gets a Hooks table. `--dry-run` runs no hooks and logs what would run.
 
-**Where:** hooks run where PayloadStash runs. In the Docker image (`python:3.11-slim`) there's no Docker CLI, `jq`, or database clients, so hooks that need host tools need a native install.
+**Where:** hooks run where PayloadStash runs. The Docker image has `bash`, core shell tools, Python, `curl`, `jq`, and the Docker CLI (no database clients); hooks see only mounted folders, and reach the host's Docker only when `/var/run/docker.sock` is mounted. Hooks that need other host tools need a native install.
 
 ---
 
@@ -1111,7 +1111,7 @@ Notes:
 - `--pull always` keeps the image current on each run.
 - `--platform linux/amd64` is required on Apple Silicon.
 - `:latest` follows the newest stable release. Replace it with a version tag such as `:1.2.0` to pin to a reproducible release.
-- Hooks run inside the container, which has no Docker CLI, `jq`, or database clients.
+- Hooks run inside the container, which has `curl`, `jq`, and the Docker CLI but no database clients. To let hooks use the host's Docker, add `-v /var/run/docker.sock:/var/run/docker.sock` (this gives the container full control of the host's Docker).
 
 ---
 
