@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Union, Tuple
 
 import yaml
+import jsonpath_ng.ext as _jsonpath_ext
 from typing_extensions import Annotated
 from pydantic import BaseModel, Field, ValidationError, ConfigDict, model_validator, field_validator, TypeAdapter
 
@@ -128,6 +129,8 @@ class Retry(BaseModel):
     RetryOnStatus: Optional[List[int]] = None
     RetryOnNetworkErrors: Optional[bool] = None
     RetryOnTimeouts: Optional[bool] = None
+    # Re-send an HTTP request while any of its Expect assertions fail (polling).
+    RetryOnExpectFailure: Optional[bool] = None
 
 
 class SectionMaps(BaseModel):
@@ -234,6 +237,40 @@ def _validate_urlroot(value: Optional[Union[str, Dict[str, Any]]]) -> Optional[U
     return value
 
 
+def _is_operator(value: Any) -> bool:
+    """A single-key mapping such as { $captured: K } that is resolved to a value later."""
+    return isinstance(value, dict) and len(value) == 1 and str(next(iter(value))).startswith("$")
+
+
+def _validate_expect(value: Optional[List[Dict[str, Any]]]) -> Optional[List[Dict[str, Any]]]:
+    """Check the expected-value shape of the collection matchers. Other matchers are not checked here."""
+    if value is None:
+        return value
+    for i, item in enumerate(value):
+        if not isinstance(item, dict) or len(item) != 1:
+            continue
+        path, spec = next(iter(item.items()))
+        if not isinstance(spec, dict):
+            continue
+        for mk, mv in spec.items():
+            where = f"Expect[{i}] {path}"
+            if isinstance(mv, dict) and "$jsonpath" in mv:
+                expr = mv["$jsonpath"]
+                if not isinstance(expr, str) or not expr.startswith("$"):
+                    raise ValueError(f"{where}: $jsonpath expects a JSONPath string starting with '$'")
+                try:
+                    _jsonpath_ext.parse(expr.rsplit("::", 1)[0] if "::" in expr else expr)
+                except Exception as e:
+                    raise ValueError(f"{where}: $jsonpath expression {expr!r} is not valid: {e}")
+            if mk == "unique" and not isinstance(mv, bool):
+                raise ValueError(f"{where}: unique expects true or false")
+            if mk in ("setEquals", "containsAll") and not (isinstance(mv, list) or _is_operator(mv)):
+                raise ValueError(f"{where}: {mk} expects a list")
+            if mk == "keysEqual" and not (_is_operator(mv) or (isinstance(mv, list) and all(isinstance(k, str) for k in mv))):
+                raise ValueError(f"{where}: keysEqual expects a list of strings")
+    return value
+
+
 class DefaultsSection(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
@@ -250,11 +287,18 @@ class DefaultsSection(BaseModel):
     RetryCfg: Optional[Retry] = Field(None, alias='Retry')
     Response: Optional[ResponseCfg] = None
     AMQP: Optional[AmqpSection] = None
+    # Assertions applied to every request before its own Expect (see SkipDefaultExpect).
+    Expect: Optional[List[Dict[str, Any]]] = None
 
     @field_validator('URLRoot')
     @classmethod
     def validate_urlroot(cls, value):
         return _validate_urlroot(value)
+
+    @field_validator('Expect')
+    @classmethod
+    def validate_expect(cls, value):
+        return _validate_expect(value)
 
 
 class ForcedSection(BaseModel):
@@ -291,12 +335,19 @@ class HttpRequest(BaseModel):
     InsecureTLS: Optional[bool] = None
     Capture: Optional[Dict[str, Any]] = None
     Expect: Optional[List[Dict[str, Any]]] = None
+    # When true, Defaults.Expect is not applied to this request.
+    SkipDefaultExpect: Optional[bool] = None
     dynamics: Optional[Dynamics] = None
 
     @field_validator('URLRoot')
     @classmethod
     def validate_urlroot(cls, value):
         return _validate_urlroot(value)
+
+    @field_validator('Expect')
+    @classmethod
+    def validate_expect(cls, value):
+        return _validate_expect(value)
 
     @model_validator(mode='after')
     def reject_explicit_null_urlroot(self) -> 'HttpRequest':
@@ -317,7 +368,14 @@ class AmqpRequest(BaseModel):
     RetryCfg: Optional[Retry] = Field(None, alias='Retry')
     Capture: Optional[Dict[str, Any]] = None
     Expect: Optional[List[Dict[str, Any]]] = None
+    # When true, Defaults.Expect is not applied to this request.
+    SkipDefaultExpect: Optional[bool] = None
     dynamics: Optional[Dynamics] = None
+
+    @field_validator('Expect')
+    @classmethod
+    def validate_expect(cls, value):
+        return _validate_expect(value)
 
 
 class RequestItem(BaseModel):
@@ -347,6 +405,22 @@ class Sequence(BaseModel):
     Type: SequenceType
     ConcurrencyLimit: Optional[int] = Field(None, ge=1)
     Requests: List[RequestItem]
+    # Assertions evaluated once after every request in the sequence has finished, against
+    # { "captured": {...}, "requests": [{key, status, duration_ms, headers, body}, ...] }.
+    Expect: Optional[List[Dict[str, Any]]] = None
+
+    @field_validator('Expect')
+    @classmethod
+    def validate_sequence_expect(cls, value):
+        for i, item in enumerate(value or []):
+            if isinstance(item, dict) and len(item) == 1:
+                path = next(iter(item))
+                if not (isinstance(path, str) and path.startswith("$")):
+                    raise ValueError(
+                        f"Expect[{i}] {path}: Sequence Expect paths are JSONPath expressions starting with '$' "
+                        "(e.g. $.captured.KEY or $.requests[*].status)"
+                    )
+        return _validate_expect(value)
 
     @field_validator('Requests', mode='before')
     @classmethod
@@ -388,6 +462,19 @@ class Sequence(BaseModel):
                 f"Duplicate request keys are not allowed within a sequence. Duplicates found: {dups}"
             )
         return self
+
+
+def _effective_expect(defaults: Optional["DefaultsSection"], req: Any) -> Optional[List[Dict[str, Any]]]:
+    """Defaults.Expect (unless the request sets SkipDefaultExpect) followed by the request's Expect.
+
+    Returns the request's own Expect unchanged (including None or []) when nothing is inherited.
+    """
+    inherited = None
+    if defaults is not None and defaults.Expect and not getattr(req, "SkipDefaultExpect", None):
+        inherited = defaults.Expect
+    if not inherited:
+        return req.Expect
+    return list(inherited) + list(req.Expect or [])
 
 
 class StashConfig(BaseModel):
@@ -450,6 +537,27 @@ class StashConfig(BaseModel):
                 if not (exchange and str(exchange).strip()) and not (routing_key and str(routing_key).strip()):
                     raise ValueError(
                         f"AMQP request '{item.key}' must set a non-empty AMQP.Exchange or AMQP.RoutingKey"
+                    )
+        return self
+
+    @model_validator(mode='after')
+    def check_retry_on_expect_failure(self) -> 'StashConfig':
+        # A request that sets Retry.RetryOnExpectFailure itself must be an HTTP request with
+        # assertions to poll on. When the flag is inherited from Defaults.Retry it simply has
+        # no effect on AMQP requests or requests without assertions.
+        for seq in self.Sequences:
+            for item in seq.Requests:
+                req = item.value
+                retry = req.RetryCfg if "RetryCfg" in req.model_fields_set else None
+                if retry is None or not retry.RetryOnExpectFailure:
+                    continue
+                if getattr(req, "Transport", "http") == "amqp":
+                    raise ValueError(
+                        f"Request '{item.key}': Retry.RetryOnExpectFailure is supported for HTTP requests only"
+                    )
+                if not _effective_expect(self.Defaults, req):
+                    raise ValueError(
+                        f"Request '{item.key}': Retry.RetryOnExpectFailure requires an Expect list"
                     )
         return self
 
@@ -692,6 +800,12 @@ def _resolve_values(value: Any, dyn: Optional[Dynamics], secrets: Optional[Dict[
             except Exception as e:
                 raise e
             return {"$deferred": {"pattern": {"template": template, "sets": dict(sets or {})}}}
+        # $captured — the captured value with its original type, resolved at request time.
+        if "$captured" in value:
+            ckey = value["$captured"]
+            if not isinstance(ckey, str) or not ckey:
+                raise ValueError("$captured must be used as a non-empty capture name, e.g., { $captured: myKey }")
+            return {"$deferred": {"captured": ckey}}
         # Else resolve each entry
         return {k: _resolve_values(v, dyn, secrets, redact_secrets, resolved_cache) for k, v in value.items()}
     if isinstance(value, list):
@@ -744,6 +858,46 @@ except Exception:
 # (e.g. Dynamics) are resolved. Used by RequestItem.from_mapping.
 RequestModel = Annotated[Union[HttpRequest, AmqpRequest], Field(discriminator="Transport")]
 _REQUEST_ADAPTER = TypeAdapter(RequestModel)
+
+
+def _check_captured_names(seq_list: List[Dict[str, Any]]) -> None:
+    """Reject a typed { $captured: K } whose K no request in the config captures.
+
+    Catches a typo at validate time instead of letting it resolve to null at run time. A name that
+    some request does capture is accepted even if, at run time, that request fails or has not run
+    yet; it then resolves to null. ${captured:KEY} inside $pattern is not checked."""
+    declared: set = set()
+    for seq in seq_list:
+        for item in seq.get("Requests") or []:
+            for inner in item.values():
+                cap = inner.get("Capture") if isinstance(inner, dict) else None
+                if isinstance(cap, dict):
+                    declared.update(str(k) for k in cap.keys())
+
+    unknown: List[str] = []
+
+    def walk(v: Any) -> None:
+        if isinstance(v, dict):
+            ref = v.get("$deferred")
+            if len(v) == 1 and isinstance(ref, dict) and set(ref) == {"captured"}:
+                name = ref["captured"]
+                if name not in declared and name not in unknown:
+                    unknown.append(name)
+                return
+            for x in v.values():
+                walk(x)
+        elif isinstance(v, list):
+            for x in v:
+                walk(x)
+
+    walk(seq_list)
+    if unknown:
+        known = ", ".join(sorted(declared)) or "none"
+        raise ValueError(
+            "{ $captured: K } names a value no request captures: "
+            + ", ".join(repr(n) for n in unknown)
+            + f". Captured names in this config: {known}"
+        )
 
 
 def build_resolved_config_dict(cfg: TopLevelConfig, secrets: Optional[Dict[str, str]] = None, redact_secrets: bool = False) -> Dict[str, Any]:
@@ -904,8 +1058,9 @@ def build_resolved_config_dict(cfg: TopLevelConfig, secrets: Optional[Dict[str, 
                     inner_amqp["Retry"] = None if a_retry_value is None else a_retry_value.model_dump(by_alias=True, exclude_none=True)
                 if req.Capture is not None:
                     inner_amqp["Capture"] = req.Capture
-                if req.Expect is not None:
-                    inner_amqp["Expect"] = _resolve_values(req.Expect, eff_dyn, secrets, redact_secrets, eff_cache)
+                a_expect = _effective_expect(defaults, req)
+                if a_expect is not None:
+                    inner_amqp["Expect"] = _resolve_values(a_expect, eff_dyn, secrets, redact_secrets, eff_cache)
                 resolved_requests.append(req_out_amqp)
                 continue
 
@@ -996,15 +1151,19 @@ def build_resolved_config_dict(cfg: TopLevelConfig, secrets: Optional[Dict[str, 
 
             if req.Capture is not None:
                 inner["Capture"] = req.Capture
-            if req.Expect is not None:
-                inner["Expect"] = _resolve_values(req.Expect, eff_dyn, secrets, redact_secrets, eff_cache)
+            expect_eff = _effective_expect(defaults, req)
+            if expect_eff is not None:
+                inner["Expect"] = _resolve_values(expect_eff, eff_dyn, secrets, redact_secrets, eff_cache)
 
             resolved_requests.append(req_out)
 
         seq_out["Requests"] = resolved_requests
+        if seq.Expect is not None:
+            seq_out["Expect"] = _resolve_values(seq.Expect, dyn, secrets, redact_secrets, resolved_dyn_cache)
         seq_list.append(seq_out)
 
     sc_out["Sequences"] = seq_list
+    _check_captured_names(seq_list)
 
     # Build final output with 'Static Dynamics' at the top, then StashConfig
     final_out: Dict[str, Any] = {}

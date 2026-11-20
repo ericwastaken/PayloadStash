@@ -79,4 +79,4 @@ Body:
 | `${secrets:KEY}` | Loaded secret value |
 | `${captured:KEY}` | Value captured by an earlier request |
 
-Use `${captured:KEY}` only inside `$pattern`; it needs a previous request and therefore cannot resolve at configuration load time.
+Use `${captured:KEY}` only inside `$pattern`; it needs a previous request and therefore cannot resolve at configuration load time. The result is always a string. To use a captured number, list or object with its type intact, write `{ $captured: KEY }` as the whole value. `validate` rejects a `KEY` that no request in the configuration captures, so a typo fails before anything is sent. A name that is captured somewhere but holds nothing yet when the reference is resolved (its request failed, has not run, or its path matched nothing) resolves to `null`.

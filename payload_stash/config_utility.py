@@ -138,12 +138,16 @@ def resolve_deferred(value: Any, *, secrets: Optional[Dict[str, str]] = None, re
       {"$deferred": {"func": "timestamp", "format": "iso_8601"}}
       {"$deferred": {"dynamic": {"template": "...", "sets": {...}}}}
       {"$deferred": {"pattern": {"template": "...", "sets": {...}}}}
+      {"$deferred": {"captured": "KEY"}}   -> the captured value, type preserved
     """
     if isinstance(value, Mapping):
         if "$deferred" in value:
             payload = value["$deferred"]
             if not isinstance(payload, Mapping):
                 return value
+            if "captured" in payload:
+                # Typed capture reference; a name that was never captured resolves to None.
+                return (captures or {}).get(payload["captured"])
             func = payload.get("func")
             if func == "timestamp":
                 fmt = payload.get("format") or payload.get("fmt") or "iso_8601"
@@ -173,6 +177,26 @@ def resolve_deferred(value: Any, *, secrets: Optional[Dict[str, str]] = None, re
 
 import json as _json_module
 import jsonpath_ng.ext as _jsonpath_ext
+from jsonpath_ng.jsonpath import Child as _JPChild, Fields as _JPFields, Index as _JPIndex, Root as _JPRoot, This as _JPThis
+
+# Matchers that compare a set of values. On a JSONPath that can match many nodes (wildcard,
+# filter, slice, recursive descent, union) they see every match as a list: one match is a
+# one-element list and no match is an empty list.
+LIST_MATCHERS = ("unique", "setEquals", "containsAll")
+
+
+def _is_singular_jsonpath(expr: Any) -> bool:
+    """True when the parsed JSONPath can match at most one node: only named fields and
+    single indexes, e.g. $.a.b[0].c. Anything else (*, [*], [?()], .., slices, unions) is plural."""
+    if isinstance(expr, (_JPRoot, _JPThis)):
+        return True
+    if isinstance(expr, _JPChild):
+        return _is_singular_jsonpath(expr.left) and _is_singular_jsonpath(expr.right)
+    if isinstance(expr, _JPFields):
+        return len(expr.fields) == 1 and expr.fields[0] != "*"
+    if isinstance(expr, _JPIndex):
+        return len(expr.indices) == 1
+    return False
 
 _PATH_ARRAY_RE = re.compile(r'^\[(\d+)\](.*)', re.DOTALL)
 _PATH_DOT_RE = re.compile(r'^\.([^\.\[]+)(.*)', re.DOTALL)
@@ -214,8 +238,14 @@ def _lookup_header(headers: Dict[str, str], name: str) -> Any:
     return None
 
 
-def resolve_response_path(path: Any, status: int, headers: Dict[str, str], body_text: str, duration_ms: int) -> Any:
-    """Resolve a path string or $jsonpath operator against a response."""
+def resolve_response_path(path: Any, status: int, headers: Dict[str, str], body_text: str, duration_ms: int,
+                          as_list: bool = False) -> Any:
+    """Resolve a path string or $jsonpath operator against a response.
+
+    By default a JSONPath with one match resolves to that value and with none to null. With
+    as_list=True (used for LIST_MATCHERS), a plural JSONPath with no ::aggregation resolves to the
+    list of its matches instead, so one match is [value] and none is []. A singular path
+    ($.a.b[0]) is unchanged either way, so a path to an array still resolves to the array."""
     if isinstance(path, dict) and "$jsonpath" in path:
         try:
             raw = path["$jsonpath"]
@@ -224,8 +254,10 @@ def resolve_response_path(path: Any, status: int, headers: Dict[str, str], body_
                 raw, aggregation = raw.rsplit("::", 1)
             expr = _jsonpath_ext.parse(raw)
             matches = [m.value for m in expr.find(_json_module.loads(body_text))]
+            if as_list and not aggregation and not _is_singular_jsonpath(expr):
+                return matches
             if not matches:
-                return None
+                return 0 if aggregation == "count" else None
             if aggregation:
                 nums = [v for v in matches if isinstance(v, (int, float))]
                 if aggregation == "first":
@@ -269,6 +301,19 @@ def resolve_response_path(path: Any, status: int, headers: Dict[str, str], body_
             return None
     return None
 
+
+
+def _canonical(value: Any) -> str:
+    """Order-independent identity for any JSON value, so objects and lists can be set members."""
+    return _json_module.dumps(value, sort_keys=True, default=str)
+
+
+def _distinct(values: List[Any]) -> Dict[str, Any]:
+    """Map canonical form -> first occurrence, preserving order."""
+    out: Dict[str, Any] = {}
+    for v in values:
+        out.setdefault(_canonical(v), v)
+    return out
 
 
 def _apply_matcher(matcher_key: str, actual: Any, expected: Any) -> Tuple[bool, str]:
@@ -348,6 +393,50 @@ def _apply_matcher(matcher_key: str, actual: Any, expected: Any) -> Tuple[bool, 
             passed = False
             detail = f"    actual has no length: {actual!r}"
         return passed, detail if not passed else ""
+    if matcher_key == "unique":
+        if not isinstance(actual, list):
+            return False, f"    actual is not a list: {actual!r}"
+        seen: Dict[str, Any] = {}
+        dups: Dict[str, Any] = {}
+        for v in actual:
+            c = _canonical(v)
+            if c in seen:
+                dups.setdefault(c, v)
+            seen.setdefault(c, v)
+        passed = (not dups) if expected else bool(dups)
+        if passed:
+            return True, ""
+        return False, f"    duplicates: {list(dups.values())!r}" if dups else "    actual has no duplicates"
+    if matcher_key in ("setEquals", "containsAll"):
+        if not isinstance(actual, list):
+            return False, f"    actual is not a list: {actual!r}"
+        if not isinstance(expected, list):
+            return False, f"    expected is not a list: {expected!r}"
+        have, want = _distinct(actual), _distinct(expected)
+        missing = [v for c, v in want.items() if c not in have]
+        extra = [v for c, v in have.items() if c not in want] if matcher_key == "setEquals" else []
+        if not missing and not extra:
+            return True, ""
+        parts = []
+        if missing:
+            parts.append(f"missing: {missing!r}")
+        if extra:
+            parts.append(f"unexpected: {extra!r}")
+        return False, "    " + "  ".join(parts)
+    if matcher_key == "keysEqual":
+        if not isinstance(actual, dict):
+            return False, f"    actual is not an object: {actual!r}"
+        if not isinstance(expected, list):
+            return False, f"    expected is not a list: {expected!r}"
+        keys, want = set(actual.keys()), set(expected)
+        if keys == want:
+            return True, ""
+        parts = []
+        if want - keys:
+            parts.append(f"missing: {sorted(want - keys)!r}")
+        if keys - want:
+            parts.append(f"unexpected: {sorted(keys - want)!r}")
+        return False, "    " + "  ".join(parts)
     return False, f"    unknown matcher: {matcher_key!r}"
 
 
@@ -369,15 +458,36 @@ def evaluate_expect(
         path, matcher_spec = next(iter(item.items()))
         # A path key beginning with "$" is a JSONPath expression — route it
         # through the same resolver Capture uses (filters + ::aggregation).
-        if isinstance(path, str) and path.startswith("$"):
-            actual = resolve_response_path({"$jsonpath": path}, status, headers, body_text, duration_ms)
-        else:
-            actual = resolve_response_path(str(path), status, headers, body_text, duration_ms)
+        is_jsonpath = isinstance(path, str) and path.startswith("$")
+
+        resolved: Dict[bool, Any] = {}
+
+        def _actual(as_list: bool) -> Any:
+            mode = as_list and is_jsonpath
+            if mode not in resolved:
+                if is_jsonpath:
+                    resolved[mode] = resolve_response_path({"$jsonpath": path}, status, headers, body_text,
+                                                           duration_ms, as_list=mode)
+                else:
+                    resolved[mode] = resolve_response_path(str(path), status, headers, body_text, duration_ms)
+            return resolved[mode]
+
         if not isinstance(matcher_spec, dict):
             matcher_spec = {"equals": matcher_spec}
         for mk, mv in matcher_spec.items():
-            passed, detail = _apply_matcher(str(mk), actual, mv)
             label = f"{path} {mk} {mv!r}"
+            list_mode = str(mk) in LIST_MATCHERS
+            actual = _actual(list_mode)
+            # An expected value of { $jsonpath: EXPR } is read from the response being checked.
+            ref = mv.get("$jsonpath") if isinstance(mv, dict) and len(mv) == 1 else None
+            if isinstance(ref, str):
+                expected = resolve_response_path({"$jsonpath": ref}, status, headers, body_text, duration_ms,
+                                                 as_list=list_mode)
+                passed, detail = _apply_matcher(str(mk), actual, expected)
+                if not passed:
+                    detail = f"    actual: {actual!r}  expected ({ref}): {expected!r}"
+            else:
+                passed, detail = _apply_matcher(str(mk), actual, mv)
             results.append((label, passed, detail))
     return results
 

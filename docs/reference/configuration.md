@@ -44,6 +44,7 @@ dynamics:
 | `Retry` | Optional | Optional | retry object or `null` |
 | `Response` | Optional | — | response object |
 | `AMQP` | Optional | Optional | AMQP object |
+| `Expect` | Optional | — | list of assertions applied to every request before its own `Expect` |
 
 `Defaults.URLRoot` is required when any HTTP request omits its own `URLRoot`. Although some empty flow-control mappings can pass model parsing, always provide both required fields; execution relies on effective values.
 
@@ -68,6 +69,7 @@ dynamics:
 | `RetryOnStatus` | No | list of HTTP status integers |
 | `RetryOnNetworkErrors` | No | boolean; default `true` |
 | `RetryOnTimeouts` | No | boolean; default `true` |
+| `RetryOnExpectFailure` | No | boolean; default `false`; HTTP only; re-send while any expectation fails, re-resolving request-time values per attempt; set it per request |
 
 Use `Retry: null` to disable an inherited retry policy. A request-level retry value—including explicit `null`—takes precedence over `Defaults`; `Forced.Retry` is applied last.
 
@@ -83,6 +85,7 @@ Use `Retry: null` to disable an inherited retry policy. A request-level retry va
 | `Type` | Yes | `Sequential` or `Concurrent` |
 | `ConcurrencyLimit` | Conditional | Integer ≥ 1; required for `Concurrent`, forbidden for `Sequential` |
 | `Requests` | Yes | Non-empty list of single-key request maps |
+| `Expect` | No | List of assertions evaluated once after all requests finish; paths are JSONPath over `$.captured` and `$.requests` |
 
 Each request item has exactly one request name:
 
@@ -111,6 +114,7 @@ Requests:
 | `InsecureTLS` | No | boolean |
 | `Capture` | No | map of capture names to paths/JSONPath operators |
 | `Expect` | No | list of assertions |
+| `SkipDefaultExpect` | No | boolean; `true` skips `Defaults.Expect` for this request |
 | `dynamics` | No | request-local dynamics |
 
 ## AMQP request
@@ -132,7 +136,7 @@ Requests:
 | `Body` | No | message payload, serialized as JSON when structured |
 | `FlowControl` | No | partial override |
 | `Retry` | No | retry object or `null` |
-| `Capture`, `Expect`, `dynamics` | No | same response-processing concepts as HTTP |
+| `Capture`, `Expect`, `SkipDefaultExpect`, `dynamics` | No | same response-processing concepts as HTTP |
 
 HTTP-only fields (`Method`, `URLPath`, `URLRoot`, `Headers`, `Query`, `InsecureTLS`, `Response`) are invalid on AMQP requests.
 
@@ -181,14 +185,15 @@ dynamic: { $dynamic: pattern_name, when: request }
 timestamp: { $timestamp: { format: epoch_ms, when: request } }
 function: { $func: timestamp, format: iso_8601 }
 pattern: { $pattern: "id-${uuidv4}" }
+captured: { $captured: KEY }
 ```
 
-`when` is `resolve` (default) or `request`. `$pattern` is always request-time. The timestamp `$func` accepts `format` (and the implementation also accepts `fmt`); prefer `format` for portability and clarity.
+`when` is `resolve` (default) or `request`. `$pattern` and `$captured` are always request-time; `$captured` keeps the captured value's type. Inside `Expect`, an expected value of `{ $jsonpath: EXPRESSION }` is read from the response being checked. The timestamp `$func` accepts `format` (and the implementation also accepts `fmt`); prefer `format` for portability and clarity.
 
 ## Merge summary
 
 - Precedence is `Forced` > request > `Defaults`.
-- Request `Headers`, `Body`, and `Query` replace their default section when present; forced keys overlay the selected map.
+- Request `Headers`, `Body`, and `Query` replace their default section when present; forced keys overlay the selected map. A request that adds one header must repeat the default headers it still needs (for example by merging an anchor, `<<: *common_headers`).
 - AMQP objects merge defaults → request → forced, with a deep merge for `Properties.Headers`.
 - Request-local dynamics override top-level patterns/sets of the same name.
 - Resolve-time operators appear as values in resolved output; request-time values remain deferred markers.

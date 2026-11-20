@@ -41,6 +41,7 @@ uv run python tests/test_asserts.py
 uv run python tests/test_header_case.py
 uv run python tests/test_url_operators.py
 uv run python tests/test_amqp.py
+uv run python tests/test_expect_features.py
 ```
 
 The AMQP integration harness under `amqp-test/` uses Docker Compose and a real RabbitMQ broker; see [`amqp-test/README.md`](./amqp-test/README.md).

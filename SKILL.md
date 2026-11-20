@@ -157,6 +157,8 @@ Defaults:
   Response:                           # optional
     PrettyPrint: true
     Sort: false
+  Expect:                             # optional; run on every request before its own Expect
+    - status: 200
 ```
 
 ---
@@ -201,6 +203,8 @@ Sequences:
           dynamics: ...       # optional; request-level patterns merged with top-level
           Capture: ...        # optional; extract values from the response
           Expect: ...         # optional; assert on the response
+          SkipDefaultExpect: true  # optional; do not apply Defaults.Expect to this request
+    Expect: ...               # optional; sequence-level assertions, run once after all requests
 ```
 
 **Merge rules for Headers / Body / Query:**
@@ -230,9 +234,12 @@ Retry:
   RetryOnStatus: [429, 500, 502, 503, 504]
   RetryOnNetworkErrors: true
   RetryOnTimeouts: true
+  RetryOnExpectFailure: false         # HTTP only; true = re-send while any Expect assertion fails
 ```
 
 Disable retries for a specific request with `Retry: Null`.
+
+`RetryOnExpectFailure: true` turns a request into a poll: it is re-sent, with request-time values (`when: request`, `$pattern`) regenerated for each attempt, until every assertion in its effective Expect (Defaults.Expect + its own) passes, or `Attempts` / `MaxElapsedSeconds` run out. Captures and results come from the final response. On a request with no Expect, or on an AMQP request, setting it is a validation error. Set it per request, not in `Defaults.Retry` (from defaults every HTTP request with an Expect polls, writes included). A request's own `Headers` replace `Defaults.Headers`, so merge the common headers anchor (`<<: *common_headers`) when a polled request adds a header.
 
 ---
 
@@ -407,7 +414,7 @@ Capture:
 |---|---|
 | `::first` | First match |
 | `::last` | Last match |
-| `::count` | Number of matches |
+| `::count` | Number of matches (`0` when nothing matches) |
 | `::sum` | Sum of numeric matches |
 | `::avg` | Average of numeric matches |
 | `::max` | Maximum of numeric matches |
@@ -431,7 +438,17 @@ Reference captured values in any later request field using `{ $pattern: "${captu
       - body.id: { equals: { $pattern: "${captured:thingId}" } }
 ```
 
-`${captured:KEY}` is resolved just before the request fires, so it always sees values written by previously executed requests. It is **only valid inside a `$pattern` template** — not in plain strings.
+`${captured:KEY}` is resolved just before the request fires, so it always sees values written by previously executed requests. It is **only valid inside a `$pattern` template** — not in plain strings — and always produces a **string**.
+
+To use a captured value with its original type (number, list, object), write `{ $captured: KEY }` as the whole value. `validate` rejects a KEY no request captures; a captured name with no value yet resolves to `null`.
+
+```yaml
+Body:
+  team: { $captured: team }                         # sends the captured list as a list
+Expect:
+  - body.points: { equals: { $captured: points } }  # numeric equality, not "120" == 120
+  - body.team: { setEquals: { $captured: team } }
+```
 
 ---
 
@@ -479,6 +496,32 @@ Assert on response values. All assertions run — no short-circuit on first fail
 | `in` / `notIn` | list | Value is/is not in the list |
 | `lengthEquals` / `lengthGte` / `lengthLte` | int | Array or string length |
 | `gt` / `gte` / `lt` / `lte` | number | Numeric comparison |
+| `unique` | bool | `true` = array has no repeated elements; `false` = it has at least one |
+| `setEquals` | list | Array holds exactly these elements, any order, repeats ignored |
+| `containsAll` | list | Array holds every listed element, any order |
+| `keysEqual` | list of strings | Object's keys are exactly these, any order |
+
+Collection matchers compare objects and arrays by value. On a many-node JSONPath (`[*]`, filter, slice, `..`), `unique`/`setEquals`/`containsAll` see the matches as a list: one match = one-element list, none = `[]` (so `setEquals: []` asserts nothing matches). Other matchers on that path still see a scalar for one match and null for none.
+
+**Expected value from the same response:** `{ $jsonpath: EXPR }` as an expected value is resolved against the response being checked:
+
+```yaml
+Expect:
+  - body.total: { equals: { $jsonpath: "$.items[*].amount::sum" } }
+  - body.lead: { equals: { $jsonpath: "$.order[0]" } }
+```
+
+**Sequence-level Expect:** a sequence's `Expect` runs once after all its requests finish. Paths must be JSONPath over `{ captured: {...}, requests: [{key, status, duration_ms, headers, body}, ...] }` (requests in listed order):
+
+```yaml
+- Name: ConcurrentPairing
+  Type: Concurrent
+  ConcurrencyLimit: 3
+  Requests: [ ... ]
+  Expect:
+    - "$.requests[?(@.body.merge.status=='merged')]::count": { equals: 1 }
+    - "$.requests[*].status": { setEquals: [200] }
+```
 
 Shorthand: a primitive value (`status: 200`) is sugar for `{ equals: 200 }`.
 
