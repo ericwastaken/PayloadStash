@@ -85,7 +85,7 @@ When asked for release help from a repository checkout, read `DEVELOPMENT.md`, `
 Release invariants:
 
 - Update project files with `./x-payloadstash-version-set.sh 1.3.0`; do not pass the `v` prefix to the script.
-- Run the four repository test scripts and any documentation checks relevant to the release.
+- Run every repository test script listed in `.github/workflows/tests.yml` and any documentation checks relevant to the release.
 - Commit and push the version bump to `main` before creating the release tag.
 - Create tag `v1.3.0` against that exact commit, then publish the GitHub Release. A draft release does not trigger publication.
 - A stable release publishes `1.3.0`, `1.3`, and `latest`. A prerelease such as `v1.4.0-rc.1` publishes only `1.4.0-rc.1`.
@@ -441,6 +441,8 @@ Reference captured values in any later request field using `{ $pattern: "${captu
 `${captured:KEY}` is resolved just before the request fires, so it always sees values written by previously executed requests. It is **only valid inside a `$pattern` template** — not in plain strings — and always produces a **string**.
 
 To use a captured value with its original type (number, list, object), write `{ $captured: KEY }` as the whole value. `validate` rejects a KEY no request captures; a captured name with no value yet resolves to `null`.
+
+Keep transport constraints in mind: an HTTP header must resolve to text, so use `$pattern` when the capture is not already a string; query values are URL-encoded. `Body` and `Expect` are the usual places to preserve structured JSON types.
 
 ```yaml
 Body:

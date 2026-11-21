@@ -428,6 +428,8 @@ def _apply_matcher(matcher_key: str, actual: Any, expected: Any) -> Tuple[bool, 
             return False, f"    actual is not an object: {actual!r}"
         if not isinstance(expected, list):
             return False, f"    expected is not a list: {expected!r}"
+        if not all(isinstance(key, str) for key in expected):
+            return False, f"    expected is not a list of strings: {expected!r}"
         keys, want = set(actual.keys()), set(expected)
         if keys == want:
             return True, ""

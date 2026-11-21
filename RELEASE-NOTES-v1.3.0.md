@@ -18,10 +18,12 @@ matches nothing is now `0` instead of `null` (see *Behaviour change* below).
   request, is a validation error. Set it per request: inherited from `Defaults.Retry` it makes every HTTP request
   with an `Expect` poll, writes included.
 
-- **Typed captured values: `{ $captured: KEY }`.** Written as a whole value in `Body`, `Headers`, `Query` or an
-  `Expect` matcher, it inserts the captured value with its type intact (number, list, object, boolean), where
-  `${captured:KEY}` inside `$pattern` always yields a string. `validate` rejects a `KEY` that no request in the
-  config captures; a captured name with no value yet at run time resolves to `null`.
+- **Typed captured values: `{ $captured: KEY }`.** Written as a whole value in `Body`, `Query` or an `Expect`
+  matcher, it inserts the captured value with its type intact (number, list, object, boolean), where
+  `${captured:KEY}` inside `$pattern` always yields a string. HTTP header values must still be strings; use
+  `$pattern` there when the captured value is not already text. Query values are URL-encoded for transport.
+  `validate` rejects a `KEY` that no request in the config captures; a captured name with no value yet at run
+  time resolves to `null`.
 
 - **Shared assertions: `Defaults.Expect` and `SkipDefaultExpect`.** `Defaults.Expect` is prepended to every
   request's own `Expect` (HTTP and AMQP). A request with `SkipDefaultExpect: true` keeps only its own. The resolved

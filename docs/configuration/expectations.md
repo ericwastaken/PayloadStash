@@ -71,7 +71,7 @@ Expect:
       - body.team: { setEquals: { $captured: team } }
 ```
 
-A name that has not been captured resolves to `null`. `$captured` works anywhere `$pattern` does, so it can also send a captured list or object in a later `Body`.
+A name that has not been captured resolves to `null`. `$captured` works anywhere `$pattern` does, so it can also send a captured list or object in a later `Body`. HTTP header values must still be strings, and query values are URL-encoded when sent.
 
 ## Values from the same response
 

@@ -188,7 +188,7 @@ pattern: { $pattern: "id-${uuidv4}" }
 captured: { $captured: KEY }
 ```
 
-`when` is `resolve` (default) or `request`. `$pattern` and `$captured` are always request-time; `$captured` keeps the captured value's type. Inside `Expect`, an expected value of `{ $jsonpath: EXPRESSION }` is read from the response being checked. The timestamp `$func` accepts `format` (and the implementation also accepts `fmt`); prefer `format` for portability and clarity.
+`when` is `resolve` (default) or `request`. `$pattern` and `$captured` are always request-time; `$captured` keeps the captured value's type until the containing field is serialized. HTTP header values must be text, so use `$pattern` when a capture is not already a string. Query values are URL-encoded. Inside `Expect`, an expected value of `{ $jsonpath: EXPRESSION }` is read from the response being checked. The timestamp `$func` accepts `format` (and the implementation also accepts `fmt`); prefer `format` for portability and clarity.
 
 ## Merge summary
 

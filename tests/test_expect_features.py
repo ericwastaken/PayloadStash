@@ -621,6 +621,8 @@ def test_collection_matchers():
     check("F4 keysEqual: extra key fails", not m("keysEqual", {"a": 1, "b": 2, "c": 3}, ["a", "b"])[0])
     check("F4 keysEqual: missing key fails", not m("keysEqual", {"a": 1}, ["a", "b"])[0])
     check("F4 keysEqual: non-object fails", not m("keysEqual", ["a", "b"], ["a", "b"])[0])
+    check("F4 keysEqual: resolved non-string keys fail without crashing",
+          not m("keysEqual", {"a": 1}, [1, "b"])[0])
 
     body = json.dumps({"items": [{"id": "a", "class": "x"}, {"id": "b", "class": "x"}], "empty": []})
     check("F4 ::count of matches", resolve_response_path({"$jsonpath": "$.items[?(@.class=='x')]::count"}, 200, {}, body, 1) == 2)
