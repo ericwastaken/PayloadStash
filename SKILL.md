@@ -85,7 +85,7 @@ When asked for release help from a repository checkout, read `DEVELOPMENT.md`, `
 Release invariants:
 
 - Update project files with `./x-payloadstash-version-set.sh 1.3.0`; do not pass the `v` prefix to the script.
-- Run the four repository test scripts and any documentation checks relevant to the release.
+- Run every repository test script listed in `.github/workflows/tests.yml` and any documentation checks relevant to the release.
 - Commit and push the version bump to `main` before creating the release tag.
 - Create tag `v1.3.0` against that exact commit, then publish the GitHub Release. A draft release does not trigger publication.
 - A stable release publishes `1.3.0`, `1.3`, and `latest`. A prerelease such as `v1.4.0-rc.1` publishes only `1.4.0-rc.1`.
@@ -543,7 +543,7 @@ StashConfig:
 **Entries:** a command string, or `{ Command: "...", TimeoutSeconds: N }` (N > 0; no limit when omitted). Each list runs in order; the first failing command stops its list.
 
 **How commands run:**
-- No shell. The command is split into arguments (shell-style quoting), then each argument's placeholders are filled in. A captured value with spaces or quotes stays one argument. For pipes or `&&`, call a shell explicitly: `bash -c "..."`.
+- No implicit shell. The command is split into arguments (shell-style quoting), then each argument's placeholders are filled in. A captured value with spaces or quotes stays one argument. For pipes or `&&`, call a shell explicitly: `bash -c "..."`. An explicit shell interprets its program text, so pass captured or secret data as positional arguments instead of interpolating it into that text.
 - Working directory is the config file's folder, so `hooks/x.sh` resolves from there. Scripts must be executable. The caller's environment is inherited; no variables are added.
 - `${captured:KEY}` works directly in hook commands (no `$pattern` needed), along with `${secrets:KEY}`, `${uuidv4}`, and the other `$pattern` placeholders.
 - A `${captured:KEY}` that hasn't been captured, or was captured as `null`, **fails the hook** (the command doesn't run). This is stricter than requests, which leave the text as is.
@@ -560,6 +560,8 @@ StashConfig:
 **Output:** hook stdout/stderr stream to the console (prefixed `[BeforeAll[1]]`) and to `run.log` with secret redaction; `run.log` records each command, exit code, and duration; `report.md` gets a Hooks table. `--dry-run` runs no hooks and logs what would run.
 
 **Where:** hooks run where PayloadStash runs. The Docker image has `bash`, core shell tools, Python, `curl`, `jq`, and the Docker CLI (no database clients); hooks see only mounted folders, and reach the host's Docker only when `/var/run/docker.sock` is mounted. Hooks that need other host tools need a native install.
+
+Treat any configuration containing hooks as executable code and inspect it before `run`. `validate` and `run --dry-run` do not execute hooks.
 
 ---
 

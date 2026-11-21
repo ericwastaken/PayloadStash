@@ -2,6 +2,9 @@
 
 Hooks run commands at fixed points of a run, so one configuration can hold a whole test: setup, requests, checks, and cleanup. Use them to check the environment before any request, restart a local service and wait for it, reset state between two sequences, or read an external log after the run.
 
+!!! warning "Hooks make the configuration executable"
+    `payloadstash run` can execute every program named by a hook with the same operating-system permissions as PayloadStash. Inspect and trust a configuration and its scripts before running it. `validate` and `run --dry-run` inspect hooks without executing them.
+
 ```yaml
 StashConfig:
   Name: returning-user
@@ -64,7 +67,7 @@ When a command exceeds `TimeoutSeconds`, PayloadStash kills it, together with an
 
 ## How commands run
 
-- **No shell.** PayloadStash splits the command into arguments with shell-style quoting rules, then runs the program directly. Pipes, redirection, `&&`, and `$VARIABLES` are not interpreted. When you need them, call a shell explicitly, for example `bash -c "docker logs api | tail -n 50"`, or put the logic in a script.
+- **No implicit shell.** PayloadStash splits the command into arguments with shell-style quoting rules, then runs the program directly. Pipes, redirection, `&&`, and `$VARIABLES` are not interpreted. When you need them, call a shell explicitly, for example `bash -c "docker logs api | tail -n 50"`, or put the logic in a script. Calling `bash -c` restores normal shell interpretation, so never interpolate an untrusted captured value or secret into the shell program text. Pass it as a separate positional argument instead.
 - **Working directory.** Commands run in the configuration file's folder, so `hooks/reset.sh` resolves from there wherever you start PayloadStash. Scripts must be executable (`chmod +x hooks/*.sh`).
 - **Environment.** Commands inherit the environment of the `payloadstash` process. PayloadStash adds no variables.
 
@@ -79,6 +82,7 @@ Before:
 
 - Placeholders use the same syntax and engine as [`$pattern` templates](secrets-and-dynamic-values.md). Unlike request fields, a hook command accepts placeholders directly, without `$pattern`.
 - The command is split into arguments **before** placeholders are filled in. A captured value with spaces or quotes stays one argument and is never run as shell code.
+- The preceding protection does not apply when that argument is itself the program text supplied to an explicit shell such as `bash -c`. For shell commands, pass data separately, for example `bash -c 'printf "%s\\n" "$1"' _ ${captured:userId}`.
 - A `${captured:KEY}` whose key has not been captured fails the hook: the command does not run, and the run stops as for any failing hook. A key captured as `null` (the response path was missing) counts as missing too. This is stricter than request fields, where a missing key leaves the `${captured:KEY}` text in place.
 - `Hooks.BeforeAll` cannot use `${captured:...}`, because nothing has been captured before the first sequence. Validation rejects it.
 - `${secrets:KEY}`, `${uuidv4}`, `${hex:N}`, and the other `$pattern` placeholders also work. A secret passed as an argument is visible in the process list while the command runs; prefer an environment variable you set before starting PayloadStash.

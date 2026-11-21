@@ -12,6 +12,49 @@ PayloadStash is a YAML-driven HTTP and AMQP workflow runner and executable test 
 
 The GitHub Pages guide is the source of truth for end users, including local/bootstrap, cloned UV, Git-based UV tool, and GHCR Docker installations. User configuration, CLI, examples, output, and troubleshooting details live there rather than in repository READMEs.
 
+## Script hooks for complete test suites
+
+Script hooks let one YAML suite own its setup, requests, assertions, and cleanup. `Hooks.BeforeAll` runs once before any sequence, a sequence-level `Before` runs immediately before that sequence, and `Hooks.AfterAll` runs after the last sequence that ran. Hook output is streamed to the console and recorded in the run log and Markdown report with loaded secrets redacted.
+
+```yaml
+StashConfig:
+  Name: returning-user
+  Hooks:
+    BeforeAll:
+      - hooks/check-environment.sh
+      - { Command: hooks/restart-service.sh, TimeoutSeconds: 120 }
+    AfterAll:
+      - hooks/collect-logs.sh
+  Defaults:
+    URLRoot: https://api.example.com
+    FlowControl: { DelaySeconds: 0, TimeoutSeconds: 10 }
+  Sequences:
+    - Name: CreateUser
+      Type: Sequential
+      Requests:
+        - CreateUser:
+            Method: POST
+            URLPath: /users
+            Body: { name: test-user }
+            Capture: { userId: body.id }
+            Expect:
+              - status: 201
+    - Name: ReturningVisit
+      Type: Sequential
+      Before:
+        - hooks/clear-cache.sh ${captured:userId}
+      Requests:
+        - VerifyUser:
+            Method: GET
+            URLPath: { $pattern: "/users/${captured:userId}" }
+            Expect:
+              - status: 200
+```
+
+Commands run directly, without an implicit shell, from the configuration file's directory. A hook can reference captures from earlier requests, but a missing capture fails before the command starts. `run --dry-run` reports hooks without executing them. Because `payloadstash run` can execute the named programs with the caller's permissions, treat configurations containing hooks as executable code and inspect them before running.
+
+The container image includes `curl`, `jq`, and the Docker CLI for hook scripts. Mounting `/var/run/docker.sock` lets a hook control the host Docker daemon and therefore grants the container broad host authority. Use that mount only with trusted suites. See the detailed [Script hooks guide](https://ericwastaken.github.io/PayloadStash/configuration/hooks/) and [Docker hook guidance](https://ericwastaken.github.io/PayloadStash/install/docker/#script-hooks-in-the-container).
+
 ## Source development
 
 ### UV workflow

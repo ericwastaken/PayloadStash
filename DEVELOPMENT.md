@@ -4,6 +4,8 @@ This guide covers maintainer development checks, GitHub Release publication, and
 
 ## Release publication model
 
+The test suite runs in `.github/workflows/tests.yml` on every pull request and on every push to `main`. The release workflow repeats the same scripts before building an image.
+
 The workflow in `.github/workflows/docker-publish.yml` runs only when a GitHub Release is published:
 
 ```yaml
@@ -77,7 +79,7 @@ Before GHCR authentication or publication, the workflow:
 1. Validates the release tag as SemVer beginning with `v`.
 2. Compares the tag with `pyproject.toml` and `payload_stash/__init__.py`.
 3. Confirms that the tagged commit is contained in `origin/main`.
-4. Installs the project and runs all four test scripts.
+4. Installs the project and runs all five test scripts.
 5. Builds a `linux/amd64` release candidate.
 6. Verifies the version and CLI entry point inside the candidate image.
 7. Authenticates to GHCR and publishes the validated image.
