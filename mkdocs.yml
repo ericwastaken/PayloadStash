@@ -90,6 +90,7 @@ nav:
       - Sequencing, concurrency, and retries: configuration/execution.md
       - Capture values: configuration/capture.md
       - Expectations: configuration/expectations.md
+      - Script hooks: configuration/hooks.md
   - Examples:
       - Examples overview: examples/index.md
       - HTTP workflow: examples/http-workflow.md

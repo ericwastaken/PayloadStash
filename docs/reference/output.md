@@ -20,8 +20,8 @@ Names use sequence/request order and the original configuration stem.
 | --- | --- |
 | `*-resolved.yml` | Effective configuration, with secret values redacted and deferred markers preserved |
 | `*-results.csv` | `sequence`, `request`, `timestamp`, `status`, `duration_ms`, `attempts`, `expect_passed`, `expect_failed` |
-| `*-run.log` | Detailed chronological execution, retry, capture, assertion, and error messages |
-| `*-report.md` | Human-readable summary and per-request request/response details |
+| `*-run.log` | Detailed chronological execution, retry, capture, assertion, and error messages, plus each [hook](../configuration/hooks.md)'s command, output lines, and exit code |
+| `*-report.md` | Human-readable summary and per-request request/response details; a Hooks table when the configuration has hooks |
 
 ## Response files
 
@@ -41,4 +41,4 @@ One non-empty response body is written per request. The extension follows conten
 
 ## Security and retention
 
-Loaded secrets are redacted from resolved YAML and run logs. Response bodies, request data included in reports, and captured values can still be sensitive. Restrict output directory access and apply an appropriate retention policy.
+Loaded secrets are redacted from resolved YAML and run logs, including hook commands and hook output. Response bodies, request data included in reports, and captured values can still be sensitive. Restrict output directory access and apply an appropriate retention policy.

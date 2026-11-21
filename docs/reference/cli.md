@@ -31,11 +31,17 @@ payloadstash run --out DIRECTORY [--dry-run] [--yes] [--secrets FILE] CONFIG
 ```
 
 - `--out DIRECTORY` is required and becomes the artifact root.
-- `--dry-run` resolves and logs without making HTTP requests or AMQP publishes.
+- `--dry-run` resolves and logs without making HTTP requests or AMQP publishes, and without running [script hooks](../configuration/hooks.md); the log lists the hooks that would run.
 - `--yes` skips the confirmation prompt.
 - `--secrets FILE` loads secret values; written resolved data and logs are redacted.
 
-Run configuration/output setup failures return `9`. Failed `Expect` assertions return `1`; a successful run returns `0`. Individual operation errors are recorded and execution continues, so add explicit expectations for statuses that must fail automation.
+| Exit code | Meaning |
+| --- | --- |
+| `0` | The run completed; every `Expect` assertion and hook passed |
+| `1` | One or more `Expect` assertions failed, or a `Before` or `Hooks.AfterAll` hook failed |
+| `9` | Configuration or output setup failed, or a `Hooks.BeforeAll` hook failed; no requests were sent |
+
+Individual operation errors are recorded and execution continues, so add explicit expectations for statuses that must fail automation.
 
 !!! note
     There is no `payloadstash resolve` command. Use `validate --writeResolved`, or inspect the resolved file written by `run`.

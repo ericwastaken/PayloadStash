@@ -85,7 +85,7 @@ When asked for release help from a repository checkout, read `DEVELOPMENT.md`, `
 Release invariants:
 
 - Update project files with `./x-payloadstash-version-set.sh 1.3.0`; do not pass the `v` prefix to the script.
-- Run the four repository test scripts and any documentation checks relevant to the release.
+- Run every repository test script listed in `.github/workflows/tests.yml` and any documentation checks relevant to the release.
 - Commit and push the version bump to `main` before creating the release tag.
 - Create tag `v1.3.0` against that exact commit, then publish the GitHub Release. A draft release does not trigger publication.
 - A stable release publishes `1.3.0`, `1.3`, and `latest`. A prerelease such as `v1.4.0-rc.1` publishes only `1.4.0-rc.1`.
@@ -128,6 +128,7 @@ StashConfig:
   Name: MyRun                  # required, unique run name
   Defaults: ...                # required
   Forced: ...                  # optional
+  Hooks: ...                   # optional; commands before the first sequence / after the run
   Sequences: [...]             # required, non-empty list
 ```
 
@@ -186,6 +187,7 @@ Sequences:
   - Name: MySequence          # required; unique across all sequences
     Type: Sequential          # Sequential | Concurrent
     # ConcurrencyLimit: 4     # required when Type=Concurrent; forbidden when Sequential
+    # Before: [hooks/reset.sh ${captured:id}]  # optional; commands run before this sequence's first request
     Requests:
       - RequestKey:           # unique within this sequence; used in filenames and reports
           Method: POST        # GET | POST | PUT | PATCH | DELETE | HEAD | OPTIONS
@@ -330,7 +332,7 @@ dynamics:
 | `${choice:setName}` | One random element from `dynamics.sets[setName]` |
 | `${timestamp[:format]}` | UTC timestamp; format: `epoch_ms` \| `epoch_s` \| `iso_8601` |
 | `${secrets:KEY}` | Value from the --secrets file |
-| `${captured:KEY}` | Value captured from a prior response — **only valid inside `$pattern`** |
+| `${captured:KEY}` | Value captured from a prior response — **only valid inside `$pattern`** (and directly in hook commands; see **Hooks**) |
 
 **resolve vs. request timing (for `$dynamic`):**
 - `when: resolve` (default): evaluated once at config load time. All references share the same value.
@@ -431,7 +433,7 @@ Reference captured values in any later request field using `{ $pattern: "${captu
       - body.id: { equals: { $pattern: "${captured:thingId}" } }
 ```
 
-`${captured:KEY}` is resolved just before the request fires, so it always sees values written by previously executed requests. It is **only valid inside a `$pattern` template** — not in plain strings.
+`${captured:KEY}` is resolved just before the request fires, so it always sees values written by previously executed requests. It is **only valid inside a `$pattern` template** — not in plain strings. Hook commands are the one exception: they accept `${captured:KEY}` directly (see **Hooks**).
 
 ---
 
@@ -508,6 +510,58 @@ Without an aggregation suffix a single JSONPath match yields a scalar and multip
       - status: 200
       - body.id: { equals: { $pattern: "${captured:thingId}" } }
 ```
+
+---
+
+## Hooks
+
+Hooks run commands at three points of a run, so one config holds setup, requests, checks, and cleanup.
+
+```yaml
+StashConfig:
+  Name: returning-user
+  Hooks:
+    BeforeAll:                                   # once, before the first sequence
+      - hooks/check-env.sh
+      - { Command: hooks/restart-service.sh, TimeoutSeconds: 120 }
+    AfterAll:                                    # once, after the last sequence that ran
+      - hooks/log-report.sh
+  Defaults: { URLRoot: https://api.example.com, FlowControl: { DelaySeconds: 0, TimeoutSeconds: 10 } }
+  Sequences:
+    - Name: FirstVisit
+      Type: Sequential
+      Requests:
+        - Login: { Method: POST, URLPath: /v1/login, Body: { create: true }, Capture: { userId: body.userId } }
+    - Name: ReturningVisit
+      Type: Sequential
+      Before:                                    # right before this sequence's first request
+        - hooks/clear-cached-user.sh ${captured:userId}
+      Requests:
+        - Login: { Method: POST, URLPath: /v1/login, Body: { userId: { $pattern: "${captured:userId}" } } }
+```
+
+**Entries:** a command string, or `{ Command: "...", TimeoutSeconds: N }` (N > 0; no limit when omitted). Each list runs in order; the first failing command stops its list.
+
+**How commands run:**
+- No implicit shell. The command is split into arguments (shell-style quoting), then each argument's placeholders are filled in. A captured value with spaces or quotes stays one argument. For pipes or `&&`, call a shell explicitly: `bash -c "..."`. An explicit shell interprets its program text, so pass captured or secret data as positional arguments instead of interpolating it into that text.
+- Working directory is the config file's folder, so `hooks/x.sh` resolves from there. Scripts must be executable. The caller's environment is inherited; no variables are added.
+- `${captured:KEY}` works directly in hook commands (no `$pattern` needed), along with `${secrets:KEY}`, `${uuidv4}`, and the other `$pattern` placeholders.
+- A `${captured:KEY}` that hasn't been captured, or was captured as `null`, **fails the hook** (the command doesn't run). This is stricter than requests, which leave the text as is.
+- `Hooks.BeforeAll` can't use `${captured:...}` (validation error).
+
+**Failures** (non-zero exit, timeout, command can't start, missing capture):
+
+| Failing hook | Effect | Exit code |
+|---|---|---|
+| `BeforeAll` | No requests sent; `AfterAll` doesn't run | `9` |
+| `Before` | That sequence and all later ones don't run; `AfterAll` still runs | `1` |
+| `AfterAll` | — | `1` (also when an `Expect` failed) |
+
+**Output:** hook stdout/stderr stream to the console (prefixed `[BeforeAll[1]]`) and to `run.log` with secret redaction; `run.log` records each command, exit code, and duration; `report.md` gets a Hooks table. `--dry-run` runs no hooks and logs what would run.
+
+**Where:** hooks run where PayloadStash runs. The Docker image has `bash`, core shell tools, Python, `curl`, `jq`, and the Docker CLI (no database clients); hooks see only mounted folders, and reach the host's Docker only when `/var/run/docker.sock` is mounted. Hooks that need other host tools need a native install.
+
+Treat any configuration containing hooks as executable code and inspect it before `run`. `validate` and `run --dry-run` do not execute hooks.
 
 ---
 
@@ -1022,8 +1076,9 @@ payloadstash run amqp-signals.yml --out ./output --secrets secrets.env
 - `ConcurrencyLimit` is required when `Type: Concurrent` and must not appear when `Type: Sequential`.
 - `$dynamic` requires a matching `dynamics.patterns.<name>` entry (top-level or request-level).
 - `$pattern` value must be a string template.
-- `${captured:KEY}` is only valid inside a `$pattern` template — not in plain strings.
+- `${captured:KEY}` is only valid inside a `$pattern` template — not in plain strings (hook commands are the exception).
 - `$secrets` requires a matching key in the `--secrets` file.
+- Hook commands (`Hooks.BeforeAll`, `Hooks.AfterAll`, sequence `Before`) must be non-blank with balanced quotes; `TimeoutSeconds` must be > 0; `Hooks` accepts only `BeforeAll` and `AfterAll`; `Hooks.BeforeAll` can't use `${captured:...}`.
 - Do not write `$deferred` directly — it is an internal marker.
 - `Transport: amqp` requires an `AMQP` block; HTTP-only keys (`Method`, `URLPath`, `Query`, `URLRoot`, `InsecureTLS`, `Response`, `Headers`) are not allowed on an AMQP request, and an `AMQP` block is not allowed on an HTTP request.
 - Every AMQP request needs a resolvable broker URI (`AMQP.URI` on the request or in `Defaults.AMQP`) and at least one of `AMQP.Exchange` / `AMQP.RoutingKey` non-empty.
@@ -1058,6 +1113,7 @@ Notes:
 - `--pull always` keeps the image current on each run.
 - `--platform linux/amd64` is required on Apple Silicon.
 - `:latest` follows the newest stable release. Replace it with a version tag such as `:1.2.0` to pin to a reproducible release.
+- Hooks run inside the container, which has `curl`, `jq`, and the Docker CLI but no database clients. To let hooks use the host's Docker, add `-v /var/run/docker.sock:/var/run/docker.sock` (this gives the container full control of the host's Docker).
 
 ---
 
@@ -1071,20 +1127,20 @@ payloadstash validate config.yml --secrets secrets.env
 # Run
 payloadstash run config.yml --out ./output
 payloadstash run config.yml --out ./output --secrets secrets.env
-payloadstash run config.yml --out ./output --dry-run  # no HTTP calls
+payloadstash run config.yml --out ./output --dry-run  # no HTTP calls, no hooks
 payloadstash run config.yml --out ./output --yes      # skip confirmation prompt
 ```
 
 **Exit codes:**
-- `0` — run completed, all Expect assertions passed
-- `1` — one or more `Expect` assertions failed
-- `9` — validation error or output write error
+- `0` — run completed, all Expect assertions and hooks passed
+- `1` — one or more `Expect` assertions failed, or a `Before` / `Hooks.AfterAll` hook failed
+- `9` — validation error, output write error, or a `Hooks.BeforeAll` hook failed (no requests sent)
 
 **Run artifacts** (written to `<out>/<Name>/<timestamp>/`):
 - `<config>-resolved.yml` — effective config after Defaults/Forced merge
-- `<config>-run.log` — full request/response log with assertion results
+- `<config>-run.log` — full request/response log with assertion results, and each hook's command, output, and exit code
 - `<config>-results.csv` — one row per request: sequence, request, timestamp, status, duration_ms, attempts, expect_passed, expect_failed (status is the HTTP code for HTTP requests, or a label like `ack`/`nack` for AMQP)
-- `<config>-report.md` — markdown report with assertions summary table and per-request details
+- `<config>-report.md` — markdown report with assertions summary table, a Hooks table when hooks exist, and per-request details
 - `seq<NNN>-<Name>/req<NNN>-<Key>-response.<ext>` — raw response body per request
 
 ---

@@ -29,7 +29,24 @@ dynamics:
 | `Name` | Yes | non-empty string | Used in output paths and reports |
 | `Defaults` | Yes | defaults object | Base HTTP/AMQP and execution settings |
 | `Forced` | No | forced object | Final overlay applied to every compatible request |
+| `Hooks` | No | hooks object | Commands run before the first sequence and after the run |
 | `Sequences` | Yes | non-empty list | Sequence names must be unique |
+
+### `Hooks`
+
+| Field | Required | Type | Rules |
+| --- | --- | --- | --- |
+| `BeforeAll` | No | list of hook entries | Run once before the first sequence. `${captured:...}` is not allowed |
+| `AfterAll` | No | list of hook entries | Run once after the last sequence that ran |
+
+A hook entry is a non-blank command string, or a mapping:
+
+| Field | Required | Type | Rules |
+| --- | --- | --- | --- |
+| `Command` | Yes | non-blank string | Split into arguments with shell-style quoting (balanced quotes required); run without a shell |
+| `TimeoutSeconds` | No | number > 0 | Kill the command and fail the hook after this time |
+
+Commands run in the configuration file's folder with the caller's environment. Placeholders (`${captured:KEY}`, `${secrets:KEY}`, and the other `$pattern` placeholders) are filled in per argument when the hook runs; a missing or `null` captured key fails the hook. The resolved configuration keeps commands as written. See [Script hooks](../configuration/hooks.md) for order and failure rules.
 
 ## Defaults and forced fields
 
@@ -82,6 +99,7 @@ Use `Retry: null` to disable an inherited retry policy. A request-level retry va
 | `Name` | Yes | Non-empty and unique within the run |
 | `Type` | Yes | `Sequential` or `Concurrent` |
 | `ConcurrencyLimit` | Conditional | Integer ≥ 1; required for `Concurrent`, forbidden for `Sequential` |
+| `Before` | No | List of hook entries (see [`Hooks`](#hooks)) run right before this sequence's first request |
 | `Requests` | Yes | Non-empty list of single-key request maps |
 
 Each request item has exactly one request name:

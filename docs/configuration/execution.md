@@ -19,6 +19,7 @@ Sequences:
 - `Sequential` sends one request at a time and applies the effective delay after each request.
 - `Concurrent` uses a worker pool. `ConcurrencyLimit` is required and must be positive; the runner never creates more workers than requests.
 - One request error does not stop later requests. Add `Expect` rules when failures must make the overall command fail.
+- To run commands before the first sequence, before one sequence, or after the run (environment checks, service restarts, state resets, log checks), use [script hooks](hooks.md).
 
 ## Flow control
 
