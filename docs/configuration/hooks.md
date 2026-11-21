@@ -5,6 +5,10 @@ Hooks run commands at fixed points of a run, so one configuration can hold a who
 !!! warning "Hooks make the configuration executable"
     `payloadstash run` can execute every program named by a hook with the same operating-system permissions as PayloadStash. Inspect and trust a configuration and its scripts before running it. `validate` and `run --dry-run` inspect hooks without executing them.
 
+## Practical example: test first and returning visits
+
+Suppose a login service behaves differently for a new user and a returning user, and a regression appears only after the service cache is cleared. The suite below restarts the local service into a known state, creates and captures a unique user, clears that user's cache before the second sequence, and collects the relevant service log lines afterward. This keeps the environment setup, test traffic, state transition, and diagnostic cleanup in one repeatable command.
+
 ```yaml
 StashConfig:
   Name: returning-user
@@ -37,6 +41,8 @@ StashConfig:
             URLPath: /v1/login
             Body: { userId: { $pattern: "${captured:userId}" }, create: false }
 ```
+
+This pattern is also useful for starting a disposable dependency, loading a database fixture, checking an external tool before a run, or collecting container logs after a failed assertion.
 
 ## When hooks run
 
