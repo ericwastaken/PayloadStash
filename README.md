@@ -12,6 +12,47 @@ PayloadStash is a YAML-driven HTTP and AMQP workflow runner and executable test 
 
 The GitHub Pages guide is the source of truth for end users, including local/bootstrap, cloned UV, Git-based UV tool, and GHCR Docker installations. User configuration, CLI, examples, output, and troubleshooting details live there rather than in repository READMEs.
 
+## Advanced test assertions
+
+PayloadStash can express shared request contracts, polling, collection checks, same-response comparisons, and assertions spanning an entire sequence. These remain YAML test-suite features rather than Python test code:
+
+```yaml
+StashConfig:
+  Name: inventory-sync
+  Defaults:
+    URLRoot: https://api.example.com
+    FlowControl: { DelaySeconds: 0, TimeoutSeconds: 10 }
+    Expect:
+      - status: 200
+  Sequences:
+    - Name: WaitForReplica
+      Type: Sequential
+      Requests:
+        - GetReplica:
+            Method: GET
+            URLPath: /replicas/current
+            Retry:
+              Attempts: 20
+              BackoffStrategy: fixed
+              BackoffSeconds: 1
+              RetryOnExpectFailure: true
+            Expect:
+              - body.items: { unique: true }
+              - body.items: { containsAll: [primary] }
+              - body.total: { equals: { $jsonpath: "$.items[*]::count" } }
+            Capture:
+              replicaItems: body.items
+      Expect:
+        - "$.requests[*].status": { setEquals: [200] }
+        - "$.captured.replicaItems": { unique: true }
+```
+
+`Defaults.Expect` is prepended to every HTTP and AMQP request unless that request sets `SkipDefaultExpect: true`. `RetryOnExpectFailure` is HTTP-only and resends the request until its effective expectations pass or the retry budget ends. Request-time dynamic values are regenerated for each polling attempt. The `unique`, `setEquals`, `containsAll`, and `keysEqual` matchers operate on JSON collections, while `{ $jsonpath: ... }` can supply an expected value from another part of the same response.
+
+Use `{ $captured: KEY }` when a captured number, list, object, or boolean must retain its JSON type. HTTP headers still require text and query values are URL-encoded, so `${captured:KEY}` inside `$pattern` is usually the right form for those textual transports. Sequence-level `Expect` evaluates after every request in that sequence and writes its own CSV/report result.
+
+See the detailed [Expectations guide](https://ericwastaken.github.io/PayloadStash/configuration/expectations/), [retry behavior](https://ericwastaken.github.io/PayloadStash/configuration/execution/#retry-until-expectations-pass), and [capture guide](https://ericwastaken.github.io/PayloadStash/configuration/capture/).
+
 ## Source development
 
 ### UV workflow
@@ -41,6 +82,7 @@ uv run python tests/test_asserts.py
 uv run python tests/test_header_case.py
 uv run python tests/test_url_operators.py
 uv run python tests/test_amqp.py
+uv run python tests/test_expect_features.py
 ```
 
 The AMQP integration harness under `amqp-test/` uses Docker Compose and a real RabbitMQ broker; see [`amqp-test/README.md`](./amqp-test/README.md).

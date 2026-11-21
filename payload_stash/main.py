@@ -589,56 +589,65 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool, secrets: Path | N
                     capture_cfg = r_val.get("Capture")
                     expect_cfg = r_val.get("Expect")
 
-                    # Materialize $deferred markers with captures snapshot so $pattern templates
-                    # containing ${captured:KEY} resolve to the correct runtime values.
-                    headers_res = resolve_deferred(headers_raw, secrets=secrets_map, captures=caps_snap) if headers_raw is not None else None
-                    body_res = resolve_deferred(body_raw, secrets=secrets_map, captures=caps_snap) if body_raw is not None else None
-                    query_res = resolve_deferred(query_raw, secrets=secrets_map, captures=caps_snap) if query_raw is not None else None
                     if expect_cfg is not None:
                         expect_cfg = resolve_deferred(expect_cfg, secrets=secrets_map, captures=caps_snap)
 
-                    # URLRoot/URLPath support the same operators as Headers/Body/Query
-                    # ($secrets/$dynamic/$timestamp/$func/$pattern, incl. ${captured:KEY} at request time).
-                    # The resolved request carries its effective URLRoot (request-level override,
-                    # else Defaults); fall back to Defaults.URLRoot for older resolved configs.
-                    url_root_eff = r_val["URLRoot"] if "URLRoot" in r_val else url_root
-                    url_root_res = resolve_deferred(url_root_eff, secrets=secrets_map, captures=caps_snap)
-                    url_path_res = resolve_deferred(url_path_raw, secrets=secrets_map, captures=caps_snap)
-                    if (
-                        isinstance(url_root_res, bool)
-                        or not isinstance(url_root_res, (str, int, float))
-                        or (isinstance(url_root_res, str) and not url_root_res.strip())
-                    ):
-                        raise ValueError(
-                            f"Request '{r_key}' resolved URLRoot to an invalid value; "
-                            "expected a non-blank string or numeric scalar"
-                        )
-                    url_root_str = str(url_root_res)
-                    url_path_str = url_path_res if isinstance(url_path_res, str) else ("" if url_path_res is None else str(url_path_res))
+                    def _build_http():
+                        """Materialize $deferred markers (request-time $timestamp/$dynamic/$pattern,
+                        ${captured:KEY}) against the captures snapshot and build the outgoing request.
+                        Called again before each RetryOnExpectFailure attempt so request-time values
+                        are fresh on every poll."""
+                        headers_res = resolve_deferred(headers_raw, secrets=secrets_map, captures=caps_snap) if headers_raw is not None else None
+                        body_res = resolve_deferred(body_raw, secrets=secrets_map, captures=caps_snap) if body_raw is not None else None
+                        query_res = resolve_deferred(query_raw, secrets=secrets_map, captures=caps_snap) if query_raw is not None else None
 
-                    # Build URL
-                    base = url_root_str.rstrip('/')
-                    upath = url_path_str.lstrip('/')
-                    full_url = base + ("/" if upath else "") + upath
-                    if query_res:
-                        qparts = urlparse.urlencode(query_res, doseq=True, safe="/:?")
-                        sep = '&' if '?' in full_url else '?'
-                        full_url = f"{full_url}{sep}{qparts}"
+                        # URLRoot/URLPath support the same operators as Headers/Body/Query
+                        # ($secrets/$dynamic/$timestamp/$func/$pattern, incl. ${captured:KEY} at request time).
+                        # The resolved request carries its effective URLRoot (request-level override,
+                        # else Defaults); fall back to Defaults.URLRoot for older resolved configs.
+                        url_root_eff = r_val["URLRoot"] if "URLRoot" in r_val else url_root
+                        url_root_res = resolve_deferred(url_root_eff, secrets=secrets_map, captures=caps_snap)
+                        url_path_res = resolve_deferred(url_path_raw, secrets=secrets_map, captures=caps_snap)
+                        if (
+                            isinstance(url_root_res, bool)
+                            or not isinstance(url_root_res, (str, int, float))
+                            or (isinstance(url_root_res, str) and not url_root_res.strip())
+                        ):
+                            raise ValueError(
+                                f"Request '{r_key}' resolved URLRoot to an invalid value; "
+                                "expected a non-blank string or numeric scalar"
+                            )
+                        url_root_str = str(url_root_res)
+                        url_path_str = url_path_res if isinstance(url_path_res, str) else ("" if url_path_res is None else str(url_path_res))
 
-                    # Build data bytes
-                    data_bytes = None
-                    if body_res is not None:
-                        try:
-                            data_bytes = _json.dumps(body_res).encode('utf-8')
-                        except Exception:
-                            data_bytes = str(body_res).encode('utf-8')
+                        # Build URL
+                        base = url_root_str.rstrip('/')
+                        upath = url_path_str.lstrip('/')
+                        full_url = base + ("/" if upath else "") + upath
+                        if query_res:
+                            qparts = urlparse.urlencode(query_res, doseq=True, safe="/:?")
+                            sep = '&' if '?' in full_url else '?'
+                            full_url = f"{full_url}{sep}{qparts}"
 
-                    # Build headers
-                    headers_out: dict = {}
-                    if isinstance(headers_res, dict):
-                        headers_out.update(headers_res)
-                    if data_bytes is not None and not any(h.lower() == 'content-type' for h in headers_out):
-                        headers_out['Content-Type'] = 'application/json; charset=utf-8'
+                        # Build data bytes
+                        data_bytes = None
+                        if body_res is not None:
+                            try:
+                                data_bytes = _json.dumps(body_res).encode('utf-8')
+                            except Exception:
+                                data_bytes = str(body_res).encode('utf-8')
+
+                        # Build headers
+                        headers_out: dict = {}
+                        if isinstance(headers_res, dict):
+                            headers_out.update(headers_res)
+                        if data_bytes is not None and not any(h.lower() == 'content-type' for h in headers_out):
+                            headers_out['Content-Type'] = 'application/json; charset=utf-8'
+                        return (headers_res, body_res, query_res, url_root_str, url_path_str,
+                                full_url, data_bytes, headers_out)
+
+                    (headers_res, body_res, query_res, url_root_str, url_path_str,
+                     full_url, data_bytes, headers_out) = _build_http()
 
                     resolved_request_block = {
                         "Method": method, "URLRoot": url_root_str, "URLPath": url_path_str,
@@ -681,6 +690,20 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool, secrets: Path | N
                     resp_headers: dict = {}
                     status = -1
                     attempts_made = 0
+                    # Retry.RetryOnExpectFailure: re-send while any assertion fails. duration_ms
+                    # is measured from the first attempt, as for the final evaluation below.
+                    result_check = None
+                    rebuild = None
+                    if expect_cfg and isinstance(effective_retry, dict) and effective_retry.get("RetryOnExpectFailure"):
+                        def rebuild():
+                            fresh = _build_http()
+                            return fresh[5], fresh[7], fresh[6]
+
+                        def result_check(s, h, t):
+                            elapsed_ms = int(round((time.perf_counter() - t0) * 1000))
+                            res = evaluate_expect(expect_cfg, s, h, t, elapsed_ms)
+                            failed = sum(1 for r in res if not r[1])
+                            return f"Expect failed ({failed} of {len(res)} assertions)" if failed else None
                     try:
                         t0 = time.perf_counter()
                         status, resp_headers, resp_text, attempts_made, req_log = rm.request(
@@ -691,6 +714,8 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool, secrets: Path | N
                             timeout_s=timeout_s,
                             retry_cfg=effective_retry,
                             insecure_tls=insecure_eff,
+                            result_check=result_check,
+                            rebuild=rebuild,
                         )
                         t1 = time.perf_counter()
                         duration_ms = int(round((t1 - t0) * 1000))
@@ -797,6 +822,19 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool, secrets: Path | N
                 def _build_report_entry(seq_i, req_i, r_key, method, full_url, headers_out, body_res,
                                         status, duration_ms, resp_headers, resp_text, ct_value,
                                         capture_cfg, captures_at_time, expect_cfg, expect_results):
+                    # Keep each response for the sequence-level Expect, which runs after the sequence.
+                    try:
+                        try:
+                            parsed_body = json.loads(resp_text) if resp_text else None
+                        except Exception:
+                            parsed_body = resp_text
+                        with report_lock:
+                            seq_responses[req_i] = {
+                                "key": r_key, "status": status, "duration_ms": duration_ms,
+                                "headers": dict(resp_headers or {}), "body": parsed_body,
+                            }
+                    except Exception:
+                        pass
                     try:
                         entry = {
                             "sort_key": (seq_i, req_i),
@@ -1011,6 +1049,8 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool, secrets: Path | N
 
                     return idx, lines, expect_fail_count
 
+                seq_responses: dict = {}
+
                 # Execute sequentially or concurrently
                 s_type = (seq_d.get("Type") or "Sequential").strip()
                 total_in_seq = len(prepared_requests)
@@ -1055,6 +1095,47 @@ def run(config: Path, out_dir: Path, dry_run: bool, yes: bool, secrets: Path | N
                                 time.sleep(delay_seconds)
                         except Exception:
                             pass
+
+                # Sequence-level Expect: evaluated once against every response in the sequence
+                # plus the run's captures.
+                seq_expect_cfg = seq_d.get("Expect")
+                if seq_expect_cfg:
+                    seq_label = f"{s_name} (sequence)"
+                    if dry_run:
+                        _log_redacted("  DRY-RUN: sequence Expect skipped")
+                    else:
+                        with captures_lock:
+                            caps_snap = dict(captured)
+                        doc = {
+                            "captured": caps_snap,
+                            "requests": [seq_responses[k] for k in sorted(seq_responses)],
+                        }
+                        seq_expect = resolve_deferred(seq_expect_cfg, secrets=secrets_map, captures=caps_snap)
+                        seq_results = evaluate_expect(seq_expect, None, {}, json.dumps(doc, default=str), 0)
+                        seq_lines = ["  Sequence Expect:"]
+                        n_ok = n_bad = 0
+                        for label, passed, detail in seq_results:
+                            seq_lines.append(f"      {'✓' if passed else '✗'} {label}")
+                            if detail:
+                                seq_lines.append(f"    {detail}")
+                            if passed:
+                                n_ok += 1
+                            else:
+                                n_bad += 1
+                        _log_redacted("\n".join(seq_lines))
+                        with captures_lock:
+                            run_expect_failures[0] += n_bad
+                        _append_result_row(seq_dir_name, seq_label,
+                                           datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                                           "", 0, 0, n_ok, n_bad)
+                        with report_lock:
+                            report_entries.append({
+                                "sort_key": (i, total_in_seq + 1), "r_key": seq_label, "method": "SEQUENCE",
+                                "full_url": s_name, "headers_out": {}, "body_res": None, "status": "",
+                                "duration_ms": 0, "resp_headers": {}, "resp_text": "", "ct_value": None,
+                                "capture_cfg": None, "captured_values": None,
+                                "expect_cfg": seq_expect, "expect_results": seq_results,
+                            })
 
             _log_redacted("=== PayloadStash run finished ===")
 

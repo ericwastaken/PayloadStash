@@ -1,6 +1,6 @@
 # Capture values
 
-`Capture` stores response values in a run-level dictionary. Later requests can interpolate them with `${captured:KEY}` inside `$pattern`.
+`Capture` stores response values in a run-level dictionary. Later requests can interpolate them with `${captured:KEY}` inside `$pattern`, which yields a string, or use `{ $captured: KEY }` to get the value with its original type (number, list or object).
 
 ```yaml
 - CreateThing:
@@ -45,6 +45,6 @@ Capture:
   total: { $jsonpath: "$.items[*].score::sum" }
 ```
 
-Suffixes are `::first`, `::last`, `::count`, `::sum`, `::avg`, `::min`, and `::max`. Without a suffix, one match returns a scalar and multiple matches return a list.
+Suffixes are `::first`, `::last`, `::count`, `::sum`, `::avg`, `::min`, and `::max`. Without a suffix, one match returns a scalar and multiple matches return a list. When nothing matches, `::count` returns `0` and every other form returns `null`. (In an `Expect`, the collection matchers `unique`, `setEquals` and `containsAll` read a many-node path as a list instead; see [Expectations](expectations.md).)
 
 Expectations are evaluated before captures for the same response. A capture from one request is therefore available only to later requests.

@@ -6,7 +6,26 @@ PayloadStash builds each effective request from three layers.
 2. The request supplies its own settings and supported overrides.
 3. `Forced` merges last and wins on collisions.
 
-For `Headers`, `Body`, and `Query`, a request section replaces the corresponding default section when present, then `Forced` keys are merged into the result. Nested maps are merged where the schema defines deep merging, notably AMQP configuration and property headers.
+For `Headers`, `Body`, and `Query`, a request section replaces the corresponding default section when present, then `Forced` keys are merged into the result. They are not merged with the defaults: a request that sets only `Headers: { timestamp: … }` sends no default headers at all. Repeat the ones you need, or merge a YAML anchor:
+
+```yaml
+Defaults:
+  Headers: &common_headers
+    publisher: test
+    Authorization: { $secrets: TOKEN }
+Sequences:
+  - Name: S
+    Type: Sequential
+    Requests:
+      - Poll:
+          Method: GET
+          URLPath: /x
+          Headers:
+            <<: *common_headers
+            timestamp: { $timestamp: { format: epoch_ms, when: request } }
+```
+
+Use `Forced.Headers` instead for a header every request must carry. Nested maps are merged where the schema defines deep merging, notably AMQP configuration and property headers.
 
 ```yaml
 StashConfig:

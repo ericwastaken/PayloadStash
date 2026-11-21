@@ -101,6 +101,7 @@ jobs:
           python tests/test_header_case.py
           python tests/test_url_operators.py
           python tests/test_amqp.py
+          python tests/test_expect_features.py
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3

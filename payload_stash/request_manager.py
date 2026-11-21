@@ -137,9 +137,18 @@ class RequestManager:
         timeout_s: Optional[float] = None,
         retry_cfg: Optional[Dict[str, Any]] = None,
         insecure_tls: bool = False,
+        result_check: Optional[Callable[[int, Dict[str, str], str], Optional[str]]] = None,
+        rebuild: Optional[Callable[[], Tuple[str, Optional[Dict[str, str]], Optional[bytes]]]] = None,
     ) -> Tuple[int, Dict[str, str], str, int, str]:
         """
         Perform an HTTP request with schema-driven retries and backoff.
+
+        `result_check`, when given, is called with (status, headers, text) for each completed
+        attempt whose status is not already retryable. A non-empty return value is the reason
+        to retry that response, under the same backoff and budget as status retries.
+
+        `rebuild`, when given, is called before every attempt after the first and returns a fresh
+        (url, headers, body) to send. Without it, every attempt re-sends the original request.
 
         Returns a tuple: (status_code, headers_dict, response_text, attempts_made, request_log)
         where `request_log` is a multi-line string containing any retry/backoff notes.
@@ -177,6 +186,9 @@ class RequestManager:
         resp_text: str = ""
 
         for attempt in range(1, attempts + 1):
+            if attempt > 1 and rebuild is not None:
+                url, headers, body = rebuild()
+                log_lines.append(f"Retry: re-resolved request-time values for attempt {attempt}/{attempts}.")
             try:
                 status, resp_headers, resp_text = self._single_attempt(method, url, headers, body, timeout_s, insecure_tls)
                 last_exc = None
@@ -207,6 +219,11 @@ class RequestManager:
                 if status in retry_on_status:
                     should_retry = True
                     reason = f"HTTP {status} in RetryOnStatus"
+                elif result_check is not None:
+                    check_reason = result_check(status, resp_headers, resp_text)
+                    if check_reason:
+                        should_retry = True
+                        reason = check_reason
 
             # If no retry needed or out of attempts, break/raise
             if (not should_retry and last_exc is None) or attempt >= attempts:
