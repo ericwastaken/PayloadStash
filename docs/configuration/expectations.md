@@ -13,6 +13,52 @@ Expect:
 
 A primitive value is shorthand for `equals`. Paths use the same simple and JSONPath forms as [Capture](capture.md).
 
+## Practical example: verify asynchronous replication
+
+Suppose an order API accepts a write immediately, but a read replica needs several seconds to catch up. A conventional smoke test can pass the write and still miss a broken replica. This suite captures the order and line IDs from the write response, polls the replica until its contract passes, verifies the replicated collection regardless of order, checks the reported total against the response's own items, and asserts the two-request outcome as a sequence:
+
+```yaml
+StashConfig:
+  Name: order-replication
+  Defaults:
+    URLRoot: https://api.example.com
+    FlowControl: { DelaySeconds: 0, TimeoutSeconds: 10 }
+  Sequences:
+    - Name: CreateAndReplicate
+      Type: Sequential
+      Requests:
+        - CreateOrder:
+            Method: POST
+            URLPath: /orders
+            Body:
+              items:
+                - { sku: A100, quantity: 1 }
+                - { sku: B200, quantity: 2 }
+            Expect:
+              - status: 202
+            Capture:
+              orderId: body.id
+              lineIds: body.lineIds
+        - WaitForReplica:
+            Method: GET
+            URLPath: { $pattern: "/replicas/orders/${captured:orderId}" }
+            Retry:
+              Attempts: 30
+              BackoffStrategy: fixed
+              BackoffSeconds: 2
+              MaxElapsedSeconds: 60
+              RetryOnExpectFailure: true
+            Expect:
+              - status: 200
+              - body.state: ready
+              - body.lineIds: { setEquals: { $captured: lineIds } }
+              - body.total: { equals: { $jsonpath: "$.items[*].amount::sum" } }
+      Expect:
+        - "$.requests[*].status": { setEquals: [200, 202] }
+```
+
+This turns eventual consistency into a deterministic pass/fail test instead of a sleep-and-hope script. The same tools work for AMQP response contracts, except `RetryOnExpectFailure` is HTTP-only.
+
 ## Matchers
 
 | Matcher | Meaning |
